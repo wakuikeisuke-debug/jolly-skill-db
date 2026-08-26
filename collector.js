@@ -1,177 +1,552 @@
-(() => {
+(async () => {
 "use strict";
 
-const VERSION = "detail-test-v1.0";
-const PANEL_ID = "jolly-detail-test-panel";
+/* =========================================================
+   JOLLY CARD DETAIL COLLECTOR
+   production-v1.0
 
-const CATALOG_KEY = "jolly_card_catalog_panel_v1";
-const DETAIL_KEY  = "jolly_card_detail_test_v1";
+   ・全1,359枚
+   ・IndexedDBへカードごとに即時保存
+   ・途中再開
+   ・20枚 / 50枚バッチ
+   ・エラー記録
+   ・エラーだけ再取得
+   ・中間JSON書き出し可
+   ・SKILL SLOT除外
+   ・アイテム重複除外
+   ・目録から関連カード名を補完
+   ========================================================= */
+
+const VERSION = "detail-production-v1.0";
+
+const PANEL_ID =
+  "jolly-detail-production-panel";
+
+const CATALOG_KEY =
+  "jolly_card_catalog_panel_v1";
+
+const DB_NAME =
+  "jolly_card_database";
+
+const DB_VERSION = 1;
+
+const CARD_STORE =
+  "cards";
+
+const ERROR_STORE =
+  "errors";
+
+const META_STORE =
+  "meta";
+
+const WAIT_MS = 450;
+
+
+/* =========================================================
+   共通
+   ========================================================= */
 
 const sleep = ms =>
-  new Promise(r => setTimeout(r, ms));
-
-
-// ========================================
-// 保存データ
-// ========================================
-
-function loadCatalog() {
-  try {
-    const x = JSON.parse(
-      localStorage.getItem(CATALOG_KEY) || "null"
-    );
-
-    if (x && Array.isArray(x.cards)) {
-      return x.cards;
-    }
-  } catch(e) {}
-
-  return [];
-}
-
-
-function loadDetails() {
-  try {
-    const x = JSON.parse(
-      localStorage.getItem(DETAIL_KEY) || "null"
-    );
-
-    if (Array.isArray(x)) {
-      return x;
-    }
-  } catch(e) {}
-
-  return [];
-}
-
-
-function saveDetails(details) {
-  localStorage.setItem(
-    DETAIL_KEY,
-    JSON.stringify(details)
+  new Promise(resolve =>
+    setTimeout(resolve, ms)
   );
-}
 
 
-function mergeDetails(oldRows, newRows) {
+function cleanText(value) {
 
-  const map = new Map();
-
-  for (const x of oldRows) {
-    if (x && x.card_no) {
-      map.set(String(x.card_no), x);
-    }
-  }
-
-  for (const x of newRows) {
-    if (x && x.card_no) {
-      map.set(String(x.card_no), x);
-    }
-  }
-
-  return [...map.values()].sort(
-    (a,b) =>
-      Number(a.card_no) -
-      Number(b.card_no)
-  );
-}
-
-
-// ========================================
-// 共通
-// ========================================
-
-function cleanText(s) {
-  return String(s || "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-
-function splitRange(text) {
-
-  const m =
-    cleanText(text)
-      .match(
-        /([\d.]+)\s*[~～]\s*([\d.]+)/
-      );
-
-  if (!m) {
-    return {
-      min: null,
-      max: null,
-      raw: cleanText(text)
-    };
-  }
-
-  return {
-    min: Number(m[1]),
-    max: Number(m[2]),
-    raw: cleanText(text)
-  };
+  return String(
+    value ?? ""
+  )
+  .replace(/\s+/g, " ")
+  .trim();
 }
 
 
 function absoluteUrl(url) {
 
-  if (!url) return "";
+  if (!url) {
+    return "";
+  }
 
   try {
+
     return new URL(
       url,
       location.href
     ).href;
+
   } catch(e) {
-    return url;
+
+    return String(url);
   }
 }
 
 
-// ========================================
-// カード名
-// ========================================
+function splitRange(text) {
 
-function getCardName(doc, fallback) {
+  const raw =
+    cleanText(text);
 
-  // 多くのAlbumDetailでカード名に使用
-  const candidates = [
-    ...doc.querySelectorAll(
-      '#page_card_albumDetail span'
-    )
-  ];
+  const match =
+    raw.match(
+      /([\d.]+)\s*[~～]\s*([\d.]+)/
+    );
 
-  for (const el of candidates) {
+  if (!match) {
 
-    const style =
-      (el.getAttribute("style") || "")
-        .replace(/\s/g,"")
-        .toLowerCase();
+    return {
+      min: null,
+      max: null,
+      raw
+    };
+  }
+
+  return {
+    min: Number(match[1]),
+    max: Number(match[2]),
+    raw
+  };
+}
+
+
+/* =========================================================
+   目録
+   ========================================================= */
+
+function loadCatalog() {
+
+  try {
+
+    const value =
+      JSON.parse(
+        localStorage.getItem(
+          CATALOG_KEY
+        ) || "null"
+      );
 
     if (
-      style.includes("color:#ffff00") ||
-      style.includes("color:rgb(255,255,0)")
+      value &&
+      Array.isArray(value.cards)
     ) {
 
-      const t =
-        cleanText(el.textContent);
+      return value.cards
+        .slice()
+        .sort(
+          (a,b) =>
+            Number(a.card_no) -
+            Number(b.card_no)
+        );
+    }
+
+  } catch(e) {}
+
+  return [];
+}
+
+
+const catalog =
+  loadCatalog();
+
+
+const catalogMap =
+  new Map(
+    catalog.map(card => [
+      String(card.card_no),
+      card
+    ])
+  );
+
+
+/* =========================================================
+   IndexedDB
+   ========================================================= */
+
+function openDatabase() {
+
+  return new Promise(
+    (resolve, reject) => {
+
+      const request =
+        indexedDB.open(
+          DB_NAME,
+          DB_VERSION
+        );
+
+
+      request.onupgradeneeded =
+        event => {
+
+          const db =
+            event.target.result;
+
+
+          if (
+            !db.objectStoreNames
+              .contains(CARD_STORE)
+          ) {
+
+            db.createObjectStore(
+              CARD_STORE,
+              {
+                keyPath:
+                  "card_no"
+              }
+            );
+          }
+
+
+          if (
+            !db.objectStoreNames
+              .contains(ERROR_STORE)
+          ) {
+
+            db.createObjectStore(
+              ERROR_STORE,
+              {
+                keyPath:
+                  "card_no"
+              }
+            );
+          }
+
+
+          if (
+            !db.objectStoreNames
+              .contains(META_STORE)
+          ) {
+
+            db.createObjectStore(
+              META_STORE,
+              {
+                keyPath:
+                  "key"
+              }
+            );
+          }
+        };
+
+
+      request.onsuccess =
+        () =>
+          resolve(
+            request.result
+          );
+
+
+      request.onerror =
+        () =>
+          reject(
+            request.error
+          );
+    }
+  );
+}
+
+
+const db =
+  await openDatabase();
+
+
+function idbPut(
+  storeName,
+  value
+) {
+
+  return new Promise(
+    (resolve, reject) => {
+
+      const tx =
+        db.transaction(
+          storeName,
+          "readwrite"
+        );
+
+      const store =
+        tx.objectStore(
+          storeName
+        );
+
+      store.put(value);
+
+      tx.oncomplete =
+        () => resolve();
+
+      tx.onerror =
+        () =>
+          reject(tx.error);
+    }
+  );
+}
+
+
+function idbDelete(
+  storeName,
+  key
+) {
+
+  return new Promise(
+    (resolve, reject) => {
+
+      const tx =
+        db.transaction(
+          storeName,
+          "readwrite"
+        );
+
+      tx.objectStore(
+        storeName
+      ).delete(key);
+
+      tx.oncomplete =
+        () => resolve();
+
+      tx.onerror =
+        () =>
+          reject(tx.error);
+    }
+  );
+}
+
+
+function idbGet(
+  storeName,
+  key
+) {
+
+  return new Promise(
+    (resolve, reject) => {
+
+      const tx =
+        db.transaction(
+          storeName,
+          "readonly"
+        );
+
+      const req =
+        tx.objectStore(
+          storeName
+        ).get(key);
+
+      req.onsuccess =
+        () =>
+          resolve(
+            req.result
+          );
+
+      req.onerror =
+        () =>
+          reject(
+            req.error
+          );
+    }
+  );
+}
+
+
+function idbGetAll(
+  storeName
+) {
+
+  return new Promise(
+    (resolve, reject) => {
+
+      const tx =
+        db.transaction(
+          storeName,
+          "readonly"
+        );
+
+      const req =
+        tx.objectStore(
+          storeName
+        ).getAll();
+
+      req.onsuccess =
+        () =>
+          resolve(
+            req.result || []
+          );
+
+      req.onerror =
+        () =>
+          reject(
+            req.error
+          );
+    }
+  );
+}
+
+
+function idbCount(
+  storeName
+) {
+
+  return new Promise(
+    (resolve, reject) => {
+
+      const tx =
+        db.transaction(
+          storeName,
+          "readonly"
+        );
+
+      const req =
+        tx.objectStore(
+          storeName
+        ).count();
+
+      req.onsuccess =
+        () =>
+          resolve(
+            req.result || 0
+          );
+
+      req.onerror =
+        () =>
+          reject(
+            req.error
+          );
+    }
+  );
+}
+
+
+function idbClear(
+  storeName
+) {
+
+  return new Promise(
+    (resolve, reject) => {
+
+      const tx =
+        db.transaction(
+          storeName,
+          "readwrite"
+        );
+
+      tx.objectStore(
+        storeName
+      ).clear();
+
+      tx.oncomplete =
+        () => resolve();
+
+      tx.onerror =
+        () =>
+          reject(tx.error);
+    }
+  );
+}
+
+
+/* =========================================================
+   進捗
+   ========================================================= */
+
+async function getNextIndex() {
+
+  const row =
+    await idbGet(
+      META_STORE,
+      "next_index"
+    );
+
+  return Number(
+    row?.value || 0
+  );
+}
+
+
+async function setNextIndex(
+  value
+) {
+
+  await idbPut(
+    META_STORE,
+    {
+      key:
+        "next_index",
+
+      value:
+        Number(value),
+
+      updated_at:
+        new Date()
+          .toISOString()
+    }
+  );
+}
+
+
+/* =========================================================
+   カード名
+   ========================================================= */
+
+function getCardName(
+  doc,
+  fallback
+) {
+
+  const spans =
+    [
+      ...doc.querySelectorAll(
+        "#page_card_albumDetail span"
+      )
+    ];
+
+
+  for (
+    const span of spans
+  ) {
+
+    const style =
+      (
+        span.getAttribute(
+          "style"
+        ) || ""
+      )
+      .replace(/\s/g, "")
+      .toLowerCase();
+
+
+    if (
+      style.includes(
+        "color:#ffff00"
+      ) ||
+      style.includes(
+        "color:rgb(255,255,0)"
+      )
+    ) {
+
+      const text =
+        cleanText(
+          span.textContent
+        );
+
 
       if (
-        t &&
-        !t.includes("タップ") &&
-        t.length < 100
+        text &&
+        !text.includes(
+          "タップ"
+        ) &&
+        text.length < 100
       ) {
-        return t;
+
+        return text;
       }
     }
   }
 
-  return fallback || "";
+
+  return (
+    fallback || ""
+  );
 }
 
 
-// ========================================
-// レア度
-// ========================================
+/* =========================================================
+   レア度
+   ========================================================= */
 
 function getRarity(doc) {
 
@@ -180,43 +555,56 @@ function getRarity(doc) {
       "#page_card_cardDetail_card_rare"
     );
 
+
   if (!rare) {
+
     return {
       stars: null,
       name: ""
     };
   }
 
+
   const stars =
     rare.querySelectorAll(
       'img[src*="card_status_star"]'
     ).length;
 
+
   let rareName = "";
 
-  let n =
+  let node =
     rare.nextSibling;
+
 
   for (
     let i = 0;
-    i < 5 && n;
+    i < 6 && node;
     i++,
-    n = n.nextSibling
+    node = node.nextSibling
   ) {
 
     const text =
       cleanText(
-        n.textContent || ""
+        node.textContent || ""
       );
 
-    const m =
-      text.match(/\[([^\]]+)\]/);
 
-    if (m) {
-      rareName = m[1];
+    const match =
+      text.match(
+        /\[([^\]]+)\]/
+      );
+
+
+    if (match) {
+
+      rareName =
+        match[1];
+
       break;
     }
   }
+
 
   return {
     stars,
@@ -225,254 +613,301 @@ function getRarity(doc) {
 }
 
 
-// ========================================
-// 性別
-// ========================================
+/* =========================================================
+   性別
+   ========================================================= */
 
 function getGender(doc) {
 
   const status =
-    doc.querySelector("#card_status");
+    doc.querySelector(
+      "#card_status"
+    );
 
-  if (!status) return "";
+
+  if (!status) {
+    return "";
+  }
+
 
   const text =
     cleanText(
       status.textContent
     );
 
-  const m =
+
+  const match =
     text.match(
-      /性別\s*([^\s]+)/ 
+      /性別\s*([^\s]+)/
     );
 
-  return m
-    ? m[1]
-        .replace(/[\[\]]/g,"")
+
+  return match
+    ? match[1]
+        .replace(
+          /[\[\]]/g,
+          ""
+        )
     : "";
 }
 
 
-// ========================================
-// 所持数
-// ========================================
+/* =========================================================
+   保有数
+   ========================================================= */
 
 function getOwnedCounts(doc) {
 
-  let list = null;
-  let stock = null;
+  let list = 0;
+  let stock = 0;
 
-  const imgs =
-    doc.querySelectorAll(
+
+  doc
+    .querySelectorAll(
       "img.card_storage_icon"
-    );
+    )
+    .forEach(img => {
 
-  imgs.forEach(img => {
+      const src =
+        img.getAttribute(
+          "src"
+        ) || "";
 
-    const src =
-      img.getAttribute("src") || "";
 
-    const parent =
-      img.parentElement;
+      const parent =
+        img.parentElement;
 
-    if (!parent) return;
 
-    const html =
-      parent.innerHTML;
+      if (!parent) {
+        return;
+      }
 
-    if (
-      src.includes("icon_list.png")
-    ) {
+
+      const html =
+        parent.innerHTML;
+
+
+      const index =
+        html.indexOf(
+          img.outerHTML
+        );
+
 
       const after =
-        html.split(
-          img.outerHTML
-        )[1] || "";
+        index >= 0
+          ? html.slice(
+              index +
+              img.outerHTML.length
+            )
+          : "";
 
-      const m =
+
+      const match =
         after.match(
           /×\s*(\d+)/
         );
 
-      if (m) {
-        list = Number(m[1]);
+
+      if (!match) {
+        return;
       }
-    }
 
-    if (
-      src.includes("icon_stock.png")
-    ) {
 
-      const after =
-        html.split(
-          img.outerHTML
-        )[1] || "";
-
-      const m =
-        after.match(
-          /×\s*(\d+)/
+      const count =
+        Number(
+          match[1]
         );
 
-      if (m) {
-        stock = Number(m[1]);
+
+      if (
+        src.includes(
+          "icon_list.png"
+        )
+      ) {
+
+        list =
+          count;
       }
-    }
-  });
 
 
-  // HTML解析の予備ルート
-  if (
-    list === null ||
-    stock === null
-  ) {
+      if (
+        src.includes(
+          "icon_stock.png"
+        )
+      ) {
 
-    const text =
-      cleanText(
-        doc.body.textContent
-      );
-
-    // 完全なフォールバックにはしない
-    // 誤認防止のためnullを維持
-  }
-
-
-  const owned =
-    (
-      Number(list || 0) +
-      Number(stock || 0)
-    ) > 0;
+        stock =
+          count;
+      }
+    });
 
 
   return {
+
     list,
+
     stock,
-    owned
+
+    owned:
+      list + stock > 0
   };
 }
 
 
-// ========================================
-// スキル
-// ========================================
+/* =========================================================
+   スキル
+   ========================================================= */
 
 function getSkills(doc) {
 
   const skills = [];
 
-  const boxes =
-    doc.querySelectorAll(
-      ".skill_border02"
-    );
-
   let slot = 0;
 
-  boxes.forEach(box => {
 
-    slot++;
+  doc
+    .querySelectorAll(
+      ".skill_border02"
+    )
+    .forEach(box => {
 
-    const icon =
-      box.querySelector(
-        ".page_card_albumDetail_status_skill_icon"
-      );
-
-    const nameCandidates =
-      [...box.querySelectorAll("span")]
-        .filter(el => {
-
-          const style =
-            (
-              el.getAttribute("style") ||
-              ""
-            )
-            .replace(/\s/g,"")
-            .toLowerCase();
-
-          return (
-            style.includes(
-              "color:#fff280"
-            ) ||
-            style.includes(
-              "color:rgb(255,242,128)"
-            )
-          );
-        });
+      slot++;
 
 
-    const name =
-      cleanText(
-        nameCandidates[0]
-          ?.textContent || ""
-      );
+      const spans =
+        [
+          ...box.querySelectorAll(
+            "span"
+          )
+        ];
 
 
-    if (
-      !name ||
-      name === "－" ||
-      name === "-"
-    ) {
-      return;
-    }
+      let name = "";
 
 
-    const detail =
-      box.querySelector(
-        ".skillDetail"
-      );
+      for (
+        const span of spans
+      ) {
+
+        const style =
+          (
+            span.getAttribute(
+              "style"
+            ) || ""
+          )
+          .replace(/\s/g, "")
+          .toLowerCase();
 
 
-    let effect = "";
+        if (
+          style.includes(
+            "color:#fff280"
+          ) ||
+          style.includes(
+            "color:rgb(255,242,128)"
+          )
+        ) {
 
-    if (detail) {
+          name =
+            cleanText(
+              span.textContent
+            );
 
-      // タグを含めた全文を保持。
-      // 後段で既存スキルDBと結合する。
-      effect =
-        cleanText(
-          detail.textContent
-        );
-    }
-
-
-    let iconType = "";
-
-    if (icon) {
-
-      const src =
-        icon.getAttribute("src") ||
-        "";
-
-      const m =
-        src.match(
-          /\/icon\/([^/.]+)\.png/i
-        );
-
-      if (m) {
-        iconType = m[1];
+          break;
+        }
       }
-    }
 
 
-    skills.push({
-      slot,
-      skill_name: name,
-      effect,
-      icon_type: iconType,
-      acquire_type: "base"
+      /* 空きスキル枠を除外 */
+
+      if (
+        !name ||
+        name === "-" ||
+        name === "－" ||
+        name ===
+          "SKILL SLOT"
+      ) {
+
+        return;
+      }
+
+
+      const detail =
+        box.querySelector(
+          ".skillDetail"
+        );
+
+
+      const effect =
+        cleanText(
+          detail
+            ?.textContent ||
+          ""
+        );
+
+
+      let iconType = "";
+
+
+      const icon =
+        box.querySelector(
+          ".page_card_albumDetail_status_skill_icon"
+        );
+
+
+      if (icon) {
+
+        const src =
+          icon.getAttribute(
+            "src"
+          ) || "";
+
+
+        const match =
+          src.match(
+            /\/icon\/([^/.]+)\.png/i
+          );
+
+
+        if (match) {
+
+          iconType =
+            match[1];
+        }
+      }
+
+
+      skills.push({
+
+        slot,
+
+        skill_name:
+          name,
+
+        effect,
+
+        icon_type:
+          iconType,
+
+        acquire_type:
+          "base"
+      });
     });
-  });
 
 
   return skills;
 }
 
 
-// ========================================
-// アイテム
-// ========================================
+/* =========================================================
+   アイテム
+   ========================================================= */
 
 function getItems(doc) {
 
-  const items = [];
+  const map =
+    new Map();
+
 
   doc
     .querySelectorAll(
@@ -480,29 +915,31 @@ function getItems(doc) {
     )
     .forEach(el => {
 
-      const id =
-        el.id || "";
-
-      const m =
-        id.match(
+      const matchId =
+        (
+          el.id || ""
+        ).match(
           /item_description_(\d+)/
         );
 
-      if (!m) return;
+
+      if (!matchId) {
+        return;
+      }
 
 
       const itemId =
-        m[1];
+        matchId[1];
 
 
-      const text =
+      const description =
         cleanText(
           el.textContent
         );
 
 
       const nameMatch =
-        text.match(
+        description.match(
           /【([^】]+)】/
         );
 
@@ -514,54 +951,130 @@ function getItems(doc) {
 
 
       const unlockMatch =
-        text.match(
+        description.match(
           /スキル[「『"]([^」』"]+)[」』"]を覚える/
         );
 
 
-      const unlockSkill =
-        unlockMatch
-          ? unlockMatch[1]
-          : "";
+      const changeMatch =
+        description.match(
+          /スキル[「『"]([^」』"]+)[」』"]が[「『"]([^」』"]+)[」』"]に変化/
+        );
 
 
-      items.push({
-        item_id: itemId,
-        item_name: itemName,
-        description: text,
-        effect_type:
-          unlockSkill
-            ? "skill_unlock"
-            : "other",
-        unlock_skill:
-          unlockSkill || null,
+      let effectType =
+        "other";
 
-        // サンプルHTMLから必要個数は
-        // 確定できないため推測しない
-        required_count: null
-      });
+      let unlockSkill =
+        null;
+
+      let changeFrom =
+        null;
+
+      let changeTo =
+        null;
+
+
+      if (unlockMatch) {
+
+        effectType =
+          "skill_unlock";
+
+        unlockSkill =
+          unlockMatch[1];
+
+      } else if (
+        changeMatch
+      ) {
+
+        effectType =
+          "skill_change";
+
+        changeFrom =
+          changeMatch[1];
+
+        changeTo =
+          changeMatch[2];
+      }
+
+
+      const key =
+        itemId +
+        "|" +
+        description;
+
+
+      /* 同一アイテム重複除去 */
+
+      if (
+        map.has(key)
+      ) {
+
+        return;
+      }
+
+
+      map.set(
+        key,
+        {
+
+          item_id:
+            itemId,
+
+          item_name:
+            itemName,
+
+          description,
+
+          effect_type:
+            effectType,
+
+          unlock_skill:
+            unlockSkill,
+
+          change_from:
+            changeFrom,
+
+          change_to:
+            changeTo,
+
+          required_count:
+            null
+        }
+      );
     });
 
 
-  return items;
+  return [
+    ...map.values()
+  ];
 }
 
 
-// ========================================
-// 関連カード
-// ========================================
+/* =========================================================
+   関連カード
+   ========================================================= */
 
-function getRelatedCards(doc, ownCardNo) {
+function getRelatedCards(
+  doc,
+  ownCardNo
+) {
 
-  const out = [];
-  const seen = new Set();
+  const output = [];
+
+  const seen =
+    new Set();
+
 
   const area =
     doc.querySelector(
       "#after_card"
     );
 
-  if (!area) return out;
+
+  if (!area) {
+    return output;
+  }
 
 
   area
@@ -572,51 +1085,75 @@ function getRelatedCards(doc, ownCardNo) {
 
       try {
 
-        const u =
+        const url =
           new URL(
-            a.getAttribute("href"),
+            a.getAttribute(
+              "href"
+            ),
             location.href
           );
 
-        const no =
-          u.searchParams.get(
-            "card"
-          );
+
+        const cardNo =
+          url.searchParams
+            .get("card");
+
 
         if (
-          !no ||
-          no === String(ownCardNo) ||
-          seen.has(no)
+          !cardNo ||
+          cardNo ===
+            String(
+              ownCardNo
+            ) ||
+          seen.has(
+            cardNo
+          )
         ) {
+
           return;
         }
 
-        seen.add(no);
+
+        seen.add(
+          cardNo
+        );
 
 
-        const name =
-          cleanText(
-            a.textContent
+        const catalogRow =
+          catalogMap.get(
+            String(cardNo)
           );
 
 
-        out.push({
-          card_no: String(no),
-          card_name: name,
-          url: u.href
+        output.push({
+
+          card_no:
+            String(cardNo),
+
+          card_name:
+            catalogRow
+              ?.card_name ||
+            cleanText(
+              a.textContent
+            ) ||
+            "",
+
+          url:
+            url.href
         });
+
 
       } catch(e) {}
     });
 
 
-  return out;
+  return output;
 }
 
 
-// ========================================
-// 説明文
-// ========================================
+/* =========================================================
+   説明
+   ========================================================= */
 
 function getDescription(doc) {
 
@@ -627,61 +1164,81 @@ function getDescription(doc) {
       )
     ];
 
-  for (const el of blocks) {
+
+  for (
+    const block of blocks
+  ) {
 
     if (
-      el.closest("#after_card")
+      block.closest(
+        "#after_card"
+      )
     ) {
+
       continue;
     }
 
+
     const text =
       cleanText(
-        el.textContent
+        block.textContent
       );
+
 
     if (
       text.length >= 20
     ) {
+
       return text;
     }
   }
 
+
   return "";
 }
 
 
-// ========================================
-// 画像
-// ========================================
+/* =========================================================
+   画像
+   ========================================================= */
 
-function getImage(doc, cardNo) {
+function getImage(
+  doc,
+  cardNo
+) {
 
-  const selectors = [
-    `img[src*="/card/640/${cardNo}.jpg"]`,
-    `img[src*="/card/320/${cardNo}.jpg"]`,
-    `img[src*="/card/120/${cardNo}.jpg"]`
-  ];
+  const sizes =
+    [640,320,120];
 
-  for (const s of selectors) {
+
+  for (
+    const size of sizes
+  ) {
 
     const img =
-      doc.querySelector(s);
+      doc.querySelector(
+        `img[src*="/card/${size}/${cardNo}.jpg"]`
+      );
+
 
     if (img) {
+
       return absoluteUrl(
-        img.getAttribute("src")
+        img.getAttribute(
+          "src"
+        )
       );
     }
   }
 
+
   return "";
 }
 
 
-// ========================================
-// AlbumDetail解析
-// ========================================
+/* =========================================================
+   HTML解析
+   ========================================================= */
 
 function parseDetail(
   doc,
@@ -692,33 +1249,42 @@ function parseDetail(
   const rarity =
     getRarity(doc);
 
+
   const hp =
     splitRange(
       doc.querySelector(
         "#page_deck_select_master_hp"
-      )?.textContent
+      )
+      ?.textContent
     );
+
 
   const attack =
     splitRange(
       doc.querySelector(
         "#page_deck_select_master_attack"
-      )?.textContent
+      )
+      ?.textContent
     );
+
 
   const speed =
     splitRange(
       doc.querySelector(
         "#page_deck_select_master_speed"
-      )?.textContent
+      )
+      ?.textContent
     );
+
 
   const costText =
     cleanText(
       doc.querySelector(
         "#page_deck_select_master_cost"
-      )?.textContent
+      )
+      ?.textContent
     );
+
 
   const cost =
     costText !== ""
@@ -727,42 +1293,105 @@ function parseDetail(
 
 
   const owned =
-    getOwnedCounts(doc);
+    getOwnedCounts(
+      doc
+    );
 
 
   const items =
-    getItems(doc);
+    getItems(
+      doc
+    );
 
 
-  const unlockSkills =
+  const unlockMap =
+    new Map();
+
+
+  items
+    .filter(
+      item =>
+        item.effect_type ===
+        "skill_unlock"
+    )
+    .forEach(item => {
+
+      const key =
+        item.item_id +
+        "|" +
+        item.unlock_skill;
+
+
+      if (
+        unlockMap.has(
+          key
+        )
+      ) {
+
+        return;
+      }
+
+
+      unlockMap.set(
+        key,
+        {
+
+          skill_name:
+            item.unlock_skill,
+
+          acquire_type:
+            "item_unlock",
+
+          required_item_id:
+            item.item_id,
+
+          required_item_name:
+            item.item_name,
+
+          required_count:
+            item.required_count
+        }
+      );
+    });
+
+
+  const skillChanges =
     items
       .filter(
-        x =>
-          x.effect_type ===
-          "skill_unlock"
+        item =>
+          item.effect_type ===
+          "skill_change"
       )
-      .map(x => ({
-        skill_name:
-          x.unlock_skill,
+      .map(
+        item => ({
 
-        acquire_type:
-          "item_unlock",
+          acquire_type:
+            "item_change",
 
-        required_item_id:
-          x.item_id,
+          from_skill:
+            item.change_from,
 
-        required_item_name:
-          x.item_name,
+          to_skill:
+            item.change_to,
 
-        required_count:
-          x.required_count
-      }));
+          required_item_id:
+            item.item_id,
+
+          required_item_name:
+            item.item_name,
+
+          required_count:
+            item.required_count
+        })
+      );
 
 
   return {
 
     card_no:
-      String(cardNo),
+      String(
+        cardNo
+      ),
 
     card_name:
       getCardName(
@@ -771,7 +1400,9 @@ function parseDetail(
       ),
 
     catalog_name:
-      catalogName || "",
+      catalogName ||
+      "",
+
 
     rarity_stars:
       rarity.stars,
@@ -784,11 +1415,13 @@ function parseDetail(
 
     cost,
 
+
     hp_min:
       hp.min,
 
     hp_max:
       hp.max,
+
 
     attack_min:
       attack.min,
@@ -796,11 +1429,13 @@ function parseDetail(
     attack_max:
       attack.max,
 
+
     speed_min:
       speed.min,
 
     speed_max:
       speed.max,
+
 
     owned_list:
       owned.list,
@@ -811,40 +1446,62 @@ function parseDetail(
     owned:
       owned.owned,
 
+
     image_url:
       getImage(
         doc,
         cardNo
       ),
 
+
     detail_url:
       location.origin +
       "/?M=Card&A=AlbumDetail&card=" +
-      encodeURIComponent(cardNo),
+      encodeURIComponent(
+        cardNo
+      ),
+
 
     description:
-      getDescription(doc),
+      getDescription(
+        doc
+      ),
+
 
     skills:
-      getSkills(doc),
+      getSkills(
+        doc
+      ),
+
 
     items,
 
     unlock_skills:
-      unlockSkills,
+      [
+        ...unlockMap.values()
+      ],
+
+    skill_changes:
+      skillChanges,
+
 
     related_cards:
       getRelatedCards(
         doc,
         cardNo
-      )
+      ),
+
+
+    collected_at:
+      new Date()
+        .toISOString()
   };
 }
 
 
-// ========================================
-// 1枚取得
-// ========================================
+/* =========================================================
+   AlbumDetail取得
+   ========================================================= */
 
 async function fetchDetail(
   cardNo,
@@ -858,31 +1515,33 @@ async function fetchDetail(
     );
 
 
-  const res =
+  const response =
     await fetch(
       url,
       {
+
         credentials:
           "same-origin",
+
         cache:
           "no-store"
       }
     );
 
 
-  if (!res.ok) {
+  if (
+    !response.ok
+  ) {
 
     throw new Error(
       "HTTP " +
-      res.status +
-      " card=" +
-      cardNo
+      response.status
     );
   }
 
 
   const html =
-    await res.text();
+    await response.text();
 
 
   if (
@@ -898,7 +1557,7 @@ async function fetchDetail(
   ) {
 
     throw new Error(
-      "ログインセッションが切れています"
+      "ログインセッション切れ"
     );
   }
 
@@ -918,8 +1577,7 @@ async function fetchDetail(
   ) {
 
     throw new Error(
-      "AlbumDetailを確認できません card=" +
-      cardNo
+      "AlbumDetail判定失敗"
     );
   }
 
@@ -932,23 +1590,68 @@ async function fetchDetail(
 }
 
 
-// ========================================
-// JSON書き出し
-// ========================================
+/* =========================================================
+   JSON書き出し
+   ========================================================= */
 
-function downloadJson(details) {
+async function exportJson() {
+
+  let cards =
+    await idbGetAll(
+      CARD_STORE
+    );
+
+
+  let errors =
+    await idbGetAll(
+      ERROR_STORE
+    );
+
+
+  cards.sort(
+    (a,b) =>
+      Number(a.card_no) -
+      Number(b.card_no)
+  );
+
+
+  errors.sort(
+    (a,b) =>
+      Number(a.card_no) -
+      Number(b.card_no)
+  );
+
+
+  const nextIndex =
+    await getNextIndex();
+
 
   const payload = {
 
     meta: {
+
       type:
-        "jolly_card_detail_test",
+        "jolly_card_details",
 
       version:
         VERSION,
 
-      count:
-        details.length,
+      catalog_count:
+        catalog.length,
+
+      detail_count:
+        cards.length,
+
+      error_count:
+        errors.length,
+
+      next_index:
+        nextIndex,
+
+      finished:
+        cards.length +
+        errors.length >=
+        catalog.length,
 
       exported_at:
         new Date()
@@ -958,8 +1661,10 @@ function downloadJson(details) {
         location.origin
     },
 
-    cards:
-      details
+
+    cards,
+
+    errors
   };
 
 
@@ -991,17 +1696,22 @@ function downloadJson(details) {
     );
 
 
-  a.href = url;
+  a.href =
+    url;
+
 
   a.download =
-    "jolly_card_detail_test_" +
-    details.length +
+    "jolly_card_details_" +
+    cards.length +
+    "_errors_" +
+    errors.length +
     ".json";
 
 
   document.body.appendChild(
     a
   );
+
 
   a.click();
 
@@ -1018,9 +1728,9 @@ function downloadJson(details) {
 }
 
 
-// ========================================
-// パネル
-// ========================================
+/* =========================================================
+   パネル
+   ========================================================= */
 
 document
   .getElementById(
@@ -1029,19 +1739,15 @@ document
   ?.remove();
 
 
-let busy = false;
-
-let details =
-  loadDetails();
-
-const catalog =
-  loadCatalog();
+let busy =
+  false;
 
 
 const root =
   document.createElement(
     "div"
   );
+
 
 root.id =
   PANEL_ID;
@@ -1052,129 +1758,282 @@ root.innerHTML = `
 <style>
 
 #${PANEL_ID} {
+
   position: fixed;
+
   inset: 0;
-  z-index: 2147483647;
-  background: rgba(0,0,0,.58);
+
+  z-index:
+    2147483647;
+
+  background:
+    rgba(0,0,0,.58);
+
+  display: flex;
+
+  justify-content:
+    center;
+
+  align-items:
+    flex-end;
+
   font-family:
     -apple-system,
     BlinkMacSystemFont,
+    "Helvetica Neue",
     sans-serif;
+
   color: #111;
+
   text-shadow: none;
-  display: flex;
-  justify-content: center;
-  align-items: flex-end;
 }
+
 
 #${PANEL_ID} * {
-  box-sizing: border-box;
+
+  box-sizing:
+    border-box;
 }
 
+
 #${PANEL_ID} .panel {
+
   width: 100%;
-  max-width: 700px;
-  max-height: 90vh;
+
+  max-width:
+    700px;
+
+  max-height:
+    90vh;
+
   overflow: auto;
-  background: #f5f6f8;
-  border-radius: 20px 20px 0 0;
+
+  background:
+    #f5f6f8;
+
+  border-radius:
+    20px 20px 0 0;
+
   padding:
     14px
     14px
     calc(
       16px +
-      env(safe-area-inset-bottom)
+      env(
+        safe-area-inset-bottom
+      )
     );
 }
 
+
 #${PANEL_ID} .head {
+
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+
+  justify-content:
+    space-between;
+
+  align-items:
+    center;
+
+  gap: 10px;
 }
+
 
 #${PANEL_ID} .title {
+
   font-size: 18px;
+
   font-weight: 800;
 }
 
-#${PANEL_ID} .ver {
+
+#${PANEL_ID} .version {
+
   font-size: 11px;
+
   color: #666;
 }
+
 
 #${PANEL_ID} .box {
+
   background: #fff;
-  border: 1px solid #ddd;
-  border-radius: 14px;
+
+  border:
+    1px solid #ddd;
+
+  border-radius:
+    14px;
+
   padding: 12px;
+
   margin-top: 10px;
 }
 
+
 #${PANEL_ID} .big {
+
   font-size: 24px;
+
   font-weight: 800;
 }
 
+
 #${PANEL_ID} .small {
+
   font-size: 12px;
+
   color: #666;
+
+  line-height: 1.5;
 }
 
+
+#${PANEL_ID} .progress {
+
+  height: 10px;
+
+  background:
+    #e5e7eb;
+
+  border-radius:
+    999px;
+
+  overflow: hidden;
+
+  margin-top: 9px;
+}
+
+
+#${PANEL_ID} .bar {
+
+  height: 100%;
+
+  width: 0%;
+
+  background:
+    #111827;
+}
+
+
 #${PANEL_ID} .grid {
+
   display: grid;
+
   grid-template-columns:
     1fr 1fr;
+
   gap: 8px;
+
   margin-top: 10px;
 }
 
+
 #${PANEL_ID} button {
+
   border:
     1px solid #ccd0d5;
+
+  border-radius:
+    12px;
+
   background: #fff;
+
   color: #111;
-  border-radius: 12px;
-  padding: 11px;
+
+  padding:
+    11px 9px;
+
   font-size: 14px;
+
   font-weight: 700;
 }
 
-#${PANEL_ID} button.primary {
-  background: #111827;
+
+#${PANEL_ID}
+button.primary {
+
+  background:
+    #111827;
+
   color: #fff;
+
+  border-color:
+    #111827;
 }
 
-#${PANEL_ID} button.danger {
-  color: #b42318;
+
+#${PANEL_ID}
+button.retry {
+
+  color:
+    #b45309;
 }
 
-#${PANEL_ID} button:disabled {
-  opacity: .45;
+
+#${PANEL_ID}
+button.danger {
+
+  color:
+    #b42318;
 }
 
-#${PANEL_ID} .close {
+
+#${PANEL_ID}
+button:disabled {
+
+  opacity:
+    .45;
+}
+
+
+#${PANEL_ID}
+.close {
+
   width: 36px;
+
   height: 36px;
+
+  border-radius:
+    999px;
+
   padding: 0;
-  border-radius: 999px;
+
   font-size: 20px;
 }
 
-#${PANEL_ID} .log {
-  white-space: pre-wrap;
-  background: #111827;
+
+#${PANEL_ID}
+.log {
+
+  white-space:
+    pre-wrap;
+
+  background:
+    #111827;
+
   color: #fff;
+
+  border-radius:
+    12px;
+
+  padding: 10px;
+
+  min-height:
+    100px;
+
+  max-height:
+    220px;
+
+  overflow: auto;
+
   font:
     12px
     ui-monospace,
+    SFMono-Regular,
     Menlo,
     monospace;
-  padding: 10px;
-  min-height: 100px;
-  max-height: 220px;
-  overflow: auto;
-  border-radius: 12px;
 }
 
 </style>
@@ -1182,22 +2041,28 @@ root.innerHTML = `
 
 <div class="panel">
 
+
   <div class="head">
 
     <div>
+
       <div class="title">
-        JOLLY カード詳細テスト
+        JOLLY カード詳細収集
       </div>
 
-      <div class="ver">
+      <div class="version">
         ${VERSION}
       </div>
+
     </div>
+
 
     <button
       class="close"
-      id="jd-close">
+      id="jp-close">
+
       ×
+
     </button>
 
   </div>
@@ -1206,19 +2071,62 @@ root.innerHTML = `
   <div class="box">
 
     <div class="small">
-      目録
+      カード詳細
     </div>
+
 
     <div class="big">
-      ${catalog.length}件
+
+      <span
+        id="jp-card-count">
+        0
+      </span>
+
+      /
+
+      ${catalog.length || 1359}
+
     </div>
 
+
+    <div class="progress">
+
+      <div
+        class="bar"
+        id="jp-progress-bar">
+      </div>
+
+    </div>
+
+
+    <div
+      class="small"
+      id="jp-status">
+
+      読み込み中…
+
+    </div>
+
+  </div>
+
+
+  <div class="box">
+
     <div class="small">
-      詳細テスト保存済み：
-      <span id="jd-count">
-        ${details.length}
-      </span>
+
+      エラー：
+      <b id="jp-error-count">
+        0
+      </b>
       件
+
+      ／
+
+      次回位置：
+      <b id="jp-next-index">
+        1
+      </b>
+
     </div>
 
   </div>
@@ -1226,50 +2134,61 @@ root.innerHTML = `
 
   <div class="grid">
 
+
     <button
       class="primary"
-      id="jd-first10">
+      id="jp-next20">
 
-      先頭10枚を取得
-
-    </button>
-
-
-    <button
-      id="jd-1620">
-
-      解放カード1620を取得
+      次の20枚取得
 
     </button>
 
 
     <button
-      id="jd-export">
+      class="primary"
+      id="jp-next50">
 
-      テストJSONを書き出す
+      次の50枚取得
 
     </button>
 
 
     <button
-      id="jd-show">
+      class="retry"
+      id="jp-retry">
 
-      保存状況を確認
+      エラーだけ再取得
+
+    </button>
+
+
+    <button
+      id="jp-export">
+
+      JSONを書き出す
+
+    </button>
+
+
+    <button
+      id="jp-refresh">
+
+      状態を再読込
 
     </button>
 
 
     <button
       class="danger"
-      id="jd-reset">
+      id="jp-reset">
 
-      テスト結果を削除
+      詳細進捗をリセット
 
     </button>
 
 
     <button
-      id="jd-close2">
+      id="jp-close2">
 
       閉じる
 
@@ -1284,9 +2203,10 @@ root.innerHTML = `
       実行ログ
     </div>
 
+
     <div
       class="log"
-      id="jd-log">
+      id="jp-log">
 
       準備完了
 
@@ -1294,363 +2214,708 @@ root.innerHTML = `
 
   </div>
 
+
 </div>
 `;
 
 
-document.body.appendChild(
-  root
-);
+document.body
+  .appendChild(
+    root
+  );
 
 
 const $ =
-  q =>
-    root.querySelector(q);
+  selector =>
+    root.querySelector(
+      selector
+    );
 
 
-function log(msg) {
+function log(message) {
 
-  const e =
-    $("#jd-log");
-
-  e.textContent =
-    "[" +
+  const time =
     new Date()
-      .toLocaleTimeString() +
+      .toLocaleTimeString();
+
+
+  $("#jp-log")
+    .textContent =
+    "[" +
+    time +
     "] " +
-    msg +
+    message +
     "\n" +
-    e.textContent;
+    $("#jp-log")
+      .textContent;
 }
 
 
-function render() {
+/* =========================================================
+   画面更新
+   ========================================================= */
 
-  details =
-    loadDetails();
+async function render() {
 
-  $("#jd-count")
+  const count =
+    await idbCount(
+      CARD_STORE
+    );
+
+
+  const errorCount =
+    await idbCount(
+      ERROR_STORE
+    );
+
+
+  const nextIndex =
+    await getNextIndex();
+
+
+  const total =
+    catalog.length ||
+    1359;
+
+
+  const percent =
+    total
+      ? Math.min(
+          100,
+          count /
+          total *
+          100
+        )
+      : 0;
+
+
+  $("#jp-card-count")
     .textContent =
-    details.length;
+    count;
 
 
-  [
-    "#jd-first10",
-    "#jd-1620",
-    "#jd-reset"
-  ]
-  .forEach(id => {
-    $(id).disabled =
-      busy;
-  });
+  $("#jp-error-count")
+    .textContent =
+    errorCount;
 
 
-  $("#jd-export")
+  $("#jp-next-index")
+    .textContent =
+    Math.min(
+      nextIndex + 1,
+      total
+    );
+
+
+  $("#jp-progress-bar")
+    .style.width =
+    percent.toFixed(1) +
+    "%";
+
+
+  let status =
+    "";
+
+
+  if (
+    catalog.length !==
+    1359
+  ) {
+
+    status =
+      "目録が1,359件ではありません：" +
+      catalog.length;
+
+  } else if (
+    nextIndex >=
+      catalog.length
+  ) {
+
+    status =
+      errorCount
+        ? "通常取得完了。エラー再取得が必要です。"
+        : "全カード取得完了";
+
+  } else {
+
+    const next =
+      catalog[
+        nextIndex
+      ];
+
+
+    status =
+      "次回：" +
+      next.card_no +
+      " " +
+      next.card_name;
+  }
+
+
+  $("#jp-status")
+    .textContent =
+    status;
+
+
+  const mainDisabled =
+    busy ||
+    !catalog.length ||
+    nextIndex >=
+      catalog.length;
+
+
+  $("#jp-next20")
+    .disabled =
+    mainDisabled;
+
+
+  $("#jp-next50")
+    .disabled =
+    mainDisabled;
+
+
+  $("#jp-retry")
     .disabled =
     busy ||
-    !details.length;
+    errorCount === 0;
+
+
+  $("#jp-export")
+    .disabled =
+    busy ||
+    (
+      count === 0 &&
+      errorCount === 0
+    );
+
+
+  $("#jp-reset")
+    .disabled =
+    busy;
 }
 
 
-// ========================================
-// 先頭10枚
-// ========================================
+/* =========================================================
+   通常バッチ収集
+   ========================================================= */
 
-$("#jd-first10")
-  .onclick =
-  async () => {
+async function collectBatch(
+  numberToCollect
+) {
 
-    if (busy) return;
+  if (busy) {
+    return;
+  }
 
 
-    if (
-      catalog.length < 10
+  if (
+    catalog.length !==
+    1359
+  ) {
+
+    log(
+      "目録件数が1,359件ではありません。処理停止。"
+    );
+
+    return;
+  }
+
+
+  busy = true;
+
+  await render();
+
+
+  try {
+
+    let index =
+      await getNextIndex();
+
+
+    const end =
+      Math.min(
+        catalog.length,
+        index +
+        numberToCollect
+      );
+
+
+    const startHuman =
+      index + 1;
+
+
+    const endHuman =
+      end;
+
+
+    log(
+      `${startHuman}～${endHuman}件目を開始`
+    );
+
+
+    for (
+      ;
+      index < end;
+      index++
     ) {
 
+      const target =
+        catalog[index];
+
+
+      const progress =
+        `${index + 1}/${catalog.length}`;
+
+
       log(
-        "目録がlocalStorageにありません。"
+        `${progress} ${target.card_no} ${target.card_name} 取得中…`
       );
 
-      return;
-    }
 
+      try {
 
-    busy = true;
-    render();
-
-
-    try {
-
-      const rows = [];
-
-      const targets =
-        catalog.slice(
-          0,
-          10
-        );
-
-
-      for (
-        let i = 0;
-        i < targets.length;
-        i++
-      ) {
-
-        const target =
-          targets[i];
-
-
-        log(
-          `${i+1}/10 ` +
-          `${target.card_no} ` +
-          `${target.card_name} 取得中…`
-        );
-
-
-        try {
-
-          const row =
-            await fetchDetail(
-              target.card_no,
-              target.card_name
-            );
-
-
-          rows.push(row);
-
-
-          log(
-            `OK ${row.card_no} ` +
-            `${row.card_name} / ` +
-            `skill=${row.skills.length} / ` +
-            `owned=${row.owned}`
+        const row =
+          await fetchDetail(
+            target.card_no,
+            target.card_name
           );
 
 
-        } catch(e) {
-
-          log(
-            "ERROR " +
-            target.card_no +
-            " " +
-            (
-              e.message ||
-              e
-            )
-          );
-        }
-
-
-        await sleep(400);
-      }
-
-
-      details =
-        mergeDetails(
-          loadDetails(),
-          rows
+        await idbPut(
+          CARD_STORE,
+          row
         );
 
 
-      saveDetails(
-        details
-      );
+        /* 過去エラーがあれば消す */
 
-
-      log(
-        `先頭10枚テスト終了。保存=${details.length}件`
-      );
-
-
-    } finally {
-
-      busy = false;
-      render();
-    }
-  };
-
-
-// ========================================
-// アイテム解放確認カード
-// ========================================
-
-$("#jd-1620")
-  .onclick =
-  async () => {
-
-    if (busy) return;
-
-    busy = true;
-    render();
-
-
-    try {
-
-      log(
-        "card 1620 を取得中…"
-      );
-
-
-      const row =
-        await fetchDetail(
-          "1620",
-          "樹氷の幻獣ラタトスク"
+        await idbDelete(
+          ERROR_STORE,
+          String(
+            target.card_no
+          )
         );
 
-
-      details =
-        mergeDetails(
-          loadDetails(),
-          [row]
-        );
-
-
-      saveDetails(
-        details
-      );
-
-
-      log(
-        "1620取得成功 / " +
-        `skills=${row.skills.length} / ` +
-        `items=${row.items.length} / ` +
-        `unlock=${row.unlock_skills.length}`
-      );
-
-
-      if (
-        row.unlock_skills.length
-      ) {
 
         log(
-          "解放スキル: " +
-          row.unlock_skills
-            .map(
-              x =>
-                x.required_item_name +
-                " → " +
-                x.skill_name
-            )
-            .join(" / ")
+          `OK ${target.card_no}` +
+          ` skill=${row.skills.length}` +
+          ` item=${row.items.length}` +
+          ` owned=${row.owned}`
+        );
+
+
+      } catch(e) {
+
+        const message =
+          e?.message ||
+          String(e);
+
+
+        await idbPut(
+          ERROR_STORE,
+          {
+
+            card_no:
+              String(
+                target.card_no
+              ),
+
+            card_name:
+              target.card_name,
+
+            catalog_index:
+              index,
+
+            error:
+              message,
+
+            failed_at:
+              new Date()
+                .toISOString(),
+
+            retry_count:
+              0
+          }
+        );
+
+
+        log(
+          `ERROR ${target.card_no}: ${message}`
         );
       }
 
 
-    } catch(e) {
+      /*
+       * 成功でも失敗でも、このカードは
+       * 一度処理済みとして次へ進める。
+       * エラーは別途「エラーだけ再取得」。
+       */
 
-      log(
-        "ERROR 1620 " +
-        (
-          e.message ||
-          e
-        )
+      await setNextIndex(
+        index + 1
       );
 
-    } finally {
 
-      busy = false;
-      render();
+      await render();
+
+
+      await sleep(
+        WAIT_MS
+      );
     }
-  };
 
-
-// ========================================
-// 書き出し
-// ========================================
-
-$("#jd-export")
-  .onclick =
-  () => {
-
-    details =
-      loadDetails();
-
-    downloadJson(
-      details
-    );
 
     log(
-      `JSONを書き出しました：${details.length}件`
+      "今回のバッチ完了"
     );
-  };
 
 
-// ========================================
-// 状況確認
-// ========================================
-
-$("#jd-show")
-  .onclick =
-  () => {
-
-    details =
-      loadDetails();
-
-    const summary =
-      details.map(
-        x =>
-          x.card_no +
-          ":" +
-          x.card_name +
-          " skill=" +
-          x.skills.length +
-          " item=" +
-          x.items.length
-      );
+  } catch(e) {
 
     log(
-      summary.length
-        ? summary.join("\n")
-        : "保存データなし"
-    );
-  };
-
-
-// ========================================
-// リセット
-// ========================================
-
-$("#jd-reset")
-  .onclick =
-  () => {
-
-    if (
-      !confirm(
-        "カード詳細テスト結果を削除しますか？"
+      "処理全体エラー：" +
+      (
+        e?.message ||
+        String(e)
       )
-    ) {
+    );
+
+
+  } finally {
+
+    busy = false;
+
+    await render();
+  }
+}
+
+
+/* =========================================================
+   エラー再取得
+   ========================================================= */
+
+async function retryErrors() {
+
+  if (busy) {
+    return;
+  }
+
+
+  busy = true;
+
+  await render();
+
+
+  try {
+
+    let errors =
+      await idbGetAll(
+        ERROR_STORE
+      );
+
+
+    errors.sort(
+      (a,b) =>
+        Number(a.catalog_index) -
+        Number(b.catalog_index)
+    );
+
+
+    if (!errors.length) {
+
+      log(
+        "再取得対象エラーはありません。"
+      );
+
       return;
     }
 
 
-    localStorage.removeItem(
-      DETAIL_KEY
+    log(
+      `エラー再取得開始：${errors.length}件`
     );
 
 
-    details = [];
+    for (
+      let i = 0;
+      i < errors.length;
+      i++
+    ) {
 
-    render();
+      const errorRow =
+        errors[i];
+
+
+      const catalogRow =
+        catalogMap.get(
+          String(
+            errorRow.card_no
+          )
+        );
+
+
+      const cardName =
+        catalogRow
+          ?.card_name ||
+        errorRow.card_name ||
+        "";
+
+
+      log(
+        `RETRY ${i + 1}/${errors.length} ` +
+        `${errorRow.card_no} ${cardName}`
+      );
+
+
+      try {
+
+        const row =
+          await fetchDetail(
+            errorRow.card_no,
+            cardName
+          );
+
+
+        await idbPut(
+          CARD_STORE,
+          row
+        );
+
+
+        await idbDelete(
+          ERROR_STORE,
+          String(
+            errorRow.card_no
+          )
+        );
+
+
+        log(
+          `RETRY OK ${errorRow.card_no}`
+        );
+
+
+      } catch(e) {
+
+        const message =
+          e?.message ||
+          String(e);
+
+
+        await idbPut(
+          ERROR_STORE,
+          {
+
+            ...errorRow,
+
+            error:
+              message,
+
+            failed_at:
+              new Date()
+                .toISOString(),
+
+            retry_count:
+              Number(
+                errorRow.retry_count ||
+                0
+              ) + 1
+          }
+        );
+
+
+        log(
+          `RETRY ERROR ${errorRow.card_no}: ${message}`
+        );
+      }
+
+
+      await render();
+
+      await sleep(
+        WAIT_MS
+      );
+    }
+
 
     log(
-      "テスト結果を削除しました"
+      "エラー再取得終了"
+    );
+
+
+  } finally {
+
+    busy = false;
+
+    await render();
+  }
+}
+
+
+/* =========================================================
+   ボタン
+   ========================================================= */
+
+$("#jp-next20")
+  .onclick =
+  () =>
+    collectBatch(
+      20
+    );
+
+
+$("#jp-next50")
+  .onclick =
+  () =>
+    collectBatch(
+      50
+    );
+
+
+$("#jp-retry")
+  .onclick =
+  retryErrors;
+
+
+$("#jp-export")
+  .onclick =
+  async () => {
+
+    log(
+      "JSONを生成中…"
+    );
+
+
+    await exportJson();
+
+
+    log(
+      "JSONを書き出しました"
     );
   };
 
 
-$("#jd-close").onclick =
-  () => root.remove();
+$("#jp-refresh")
+  .onclick =
+  async () => {
+
+    await render();
+
+    const count =
+      await idbCount(
+        CARD_STORE
+      );
 
 
-$("#jd-close2").onclick =
-  () => root.remove();
+    const errors =
+      await idbCount(
+        ERROR_STORE
+      );
 
 
-render();
+    log(
+      `保存済み=${count}件 / エラー=${errors}件`
+    );
+  };
 
 
-// 固定ローダーのShortcuts処理だけ終了。
-// パネルはSafariページ上に残る。
+$("#jp-reset")
+  .onclick =
+  async () => {
+
+    const ok =
+      confirm(
+        "カード詳細の収集結果・エラー・進捗をすべて削除します。\n\n目録1,359件は削除しません。\n\nよろしいですか？"
+      );
+
+
+    if (!ok) {
+      return;
+    }
+
+
+    busy = true;
+
+    await render();
+
+
+    try {
+
+      await idbClear(
+        CARD_STORE
+      );
+
+
+      await idbClear(
+        ERROR_STORE
+      );
+
+
+      await idbClear(
+        META_STORE
+      );
+
+
+      log(
+        "詳細収集データをリセットしました"
+      );
+
+
+    } finally {
+
+      busy = false;
+
+      await render();
+    }
+  };
+
+
+$("#jp-close")
+  .onclick =
+  () =>
+    root.remove();
+
+
+$("#jp-close2")
+  .onclick =
+  () =>
+    root.remove();
+
+
+/* =========================================================
+   初期表示
+   ========================================================= */
+
+await render();
+
+
+const initialCount =
+  await idbCount(
+    CARD_STORE
+  );
+
+
+const initialErrors =
+  await idbCount(
+    ERROR_STORE
+  );
+
+
+const initialIndex =
+  await getNextIndex();
+
+
+log(
+  `目録=${catalog.length} / 詳細=${initialCount} / エラー=${initialErrors}`
+);
+
+
+/*
+ * Shortcuts側の処理のみ終了。
+ * パネルのイベントはSafari上に残る。
+ */
+
 if (
   typeof completion ===
   "function"
@@ -1658,13 +2923,25 @@ if (
 
   completion(
     JSON.stringify({
+
       ok: true,
+
       panel: true,
-      version: VERSION,
+
+      version:
+        VERSION,
+
       catalog_count:
         catalog.length,
-      detail_test_count:
-        details.length
+
+      detail_count:
+        initialCount,
+
+      error_count:
+        initialErrors,
+
+      next_index:
+        initialIndex
     })
   );
 }
