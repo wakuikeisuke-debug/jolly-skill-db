@@ -1,19 +1,9 @@
 (async () => {
 "use strict";
 
-const VERSION = "attribute-inspector-v1.0";
-const PANEL_ID = "jolly-attribute-inspector";
-
-const CATALOG_KEY =
-  "jolly_card_catalog_panel_v1";
-
-const STORAGE_KEY =
-  "jolly_attribute_inspector_v1";
-
-const WAIT_MS = 400;
-
-const sleep = ms =>
-  new Promise(r => setTimeout(r, ms));
+const VERSION = "property-filter-inspector-v1.0";
+const PANEL_ID = "jolly-property-filter-inspector";
+const STORAGE_KEY = "jolly_property_filter_inspector_v1";
 
 function cleanText(v) {
   return String(v ?? "")
@@ -21,81 +11,69 @@ function cleanText(v) {
     .trim();
 }
 
-function loadCatalog() {
-  try {
-    const x = JSON.parse(
-      localStorage.getItem(CATALOG_KEY) || "null"
-    );
 
-    if (x && Array.isArray(x.cards)) {
-      return x.cards;
-    }
-  } catch (e) {}
+/* ========================================
+   保存
+   ======================================== */
 
-  return [];
-}
-
-function loadResults() {
-  try {
-    return JSON.parse(
-      localStorage.getItem(STORAGE_KEY) || "[]"
-    );
-  } catch (e) {
-    return [];
-  }
-}
-
-function saveResults(rows) {
+function saveResult(data) {
   localStorage.setItem(
     STORAGE_KEY,
-    JSON.stringify(rows)
+    JSON.stringify(data)
   );
 }
 
-function mergeRows(oldRows, newRows) {
-  const map = new Map();
 
-  [...oldRows, ...newRows].forEach(x => {
-    if (x?.card_no) {
-      map.set(String(x.card_no), x);
-    }
-  });
-
-  return [...map.values()];
+function loadResult() {
+  try {
+    return JSON.parse(
+      localStorage.getItem(STORAGE_KEY) || "null"
+    );
+  } catch (e) {
+    return null;
+  }
 }
-
-const catalog = loadCatalog();
 
 
 /* ========================================
-   AlbumDetail取得
+   Album取得
    ======================================== */
 
-async function fetchDetail(cardNo) {
+async function fetchAlbum(url = null) {
 
-  const url =
-    "/?M=Card&A=AlbumDetail&card=" +
-    encodeURIComponent(cardNo);
+  const target =
+    url ||
+    "/?M=Card&A=Album" +
+    "&property=" +
+    "&name_text=" +
+    "&rare=" +
+    "&gacha_style=0" +
+    "&year=0" +
+    "&skill_no=" +
+    "&card_no=" +
+    "&p=0";
 
-  const res = await fetch(
-    url,
-    {
-      credentials: "same-origin",
-      cache: "no-store"
-    }
-  );
 
-  if (!res.ok) {
+  const response =
+    await fetch(
+      target,
+      {
+        credentials: "same-origin",
+        cache: "no-store"
+      }
+    );
+
+
+  if (!response.ok) {
     throw new Error(
-      "HTTP " +
-      res.status +
-      " card=" +
-      cardNo
+      "HTTP " + response.status
     );
   }
 
+
   const html =
-    await res.text();
+    await response.text();
+
 
   if (
     html.includes("ログイン情報入力") ||
@@ -107,6 +85,7 @@ async function fetchDetail(cardNo) {
     );
   }
 
+
   const doc =
     new DOMParser()
       .parseFromString(
@@ -114,450 +93,771 @@ async function fetchDetail(cardNo) {
         "text/html"
       );
 
-  if (
-    !doc.querySelector(
-      "#page_card_albumDetail"
-    )
-  ) {
-    throw new Error(
-      "AlbumDetail判定失敗"
-    );
-  }
 
   return {
     html,
-    doc
+    doc,
+    url:
+      new URL(
+        target,
+        location.href
+      ).href
   };
 }
 
 
 /* ========================================
-   属性候補調査
+   property関連リンク
    ======================================== */
 
-function inspectAttribute(
-  doc,
-  cardNo,
-  cardName
-) {
+function inspectLinks(doc) {
+
+  const rows = [];
+
+
+  doc
+    .querySelectorAll("a[href]")
+    .forEach(a => {
+
+      const href =
+        a.getAttribute("href") || "";
+
+
+      if (
+        !href.includes("property")
+      ) {
+        return;
+      }
+
+
+      try {
+
+        const u =
+          new URL(
+            href,
+            location.href
+          );
+
+
+        rows.push({
+          text:
+            cleanText(
+              a.textContent
+            ),
+
+          href:
+            u.href,
+
+          property:
+            u.searchParams.get(
+              "property"
+            ),
+
+          M:
+            u.searchParams.get("M"),
+
+          A:
+            u.searchParams.get("A"),
+
+          page:
+            u.searchParams.get("p")
+        });
+
+      } catch (e) {
+
+        rows.push({
+          text:
+            cleanText(
+              a.textContent
+            ),
+
+          href,
+
+          property:
+            null
+        });
+      }
+    });
+
+
+  return rows;
+}
+
+
+/* ========================================
+   select / option
+   ======================================== */
+
+function inspectSelects(doc) {
+
+  return [
+    ...doc.querySelectorAll(
+      "select"
+    )
+  ]
+  .map(select => ({
+
+    name:
+      select.getAttribute(
+        "name"
+      ) || "",
+
+    id:
+      select.id || "",
+
+    class:
+      select.getAttribute(
+        "class"
+      ) || "",
+
+    value:
+      select.value || "",
+
+    options:
+      [
+        ...select.querySelectorAll(
+          "option"
+        )
+      ]
+      .map(option => ({
+
+        text:
+          cleanText(
+            option.textContent
+          ),
+
+        value:
+          option.getAttribute(
+            "value"
+          ),
+
+        selected:
+          option.hasAttribute(
+            "selected"
+          )
+      }))
+  }));
+}
+
+
+/* ========================================
+   radio / checkbox / hidden
+   ======================================== */
+
+function inspectInputs(doc) {
+
+  return [
+    ...doc.querySelectorAll(
+      "input"
+    )
+  ]
+  .map(input => ({
+
+    type:
+      input.getAttribute(
+        "type"
+      ) || "",
+
+    name:
+      input.getAttribute(
+        "name"
+      ) || "",
+
+    id:
+      input.id || "",
+
+    value:
+      input.getAttribute(
+        "value"
+      ) || "",
+
+    checked:
+      input.checked || false
+  }))
+  .filter(row => {
+
+    const joined =
+      Object.values(row)
+        .join(" ");
+
+    return (
+      /property/i.test(joined) ||
+      [
+        "radio",
+        "checkbox",
+        "hidden"
+      ].includes(row.type)
+    );
+  });
+}
+
+
+/* ========================================
+   form
+   ======================================== */
+
+function inspectForms(doc) {
+
+  return [
+    ...doc.querySelectorAll(
+      "form"
+    )
+  ]
+  .map(form => ({
+
+    action:
+      form.getAttribute(
+        "action"
+      ) || "",
+
+    method:
+      form.getAttribute(
+        "method"
+      ) || "",
+
+    id:
+      form.id || "",
+
+    name:
+      form.getAttribute(
+        "name"
+      ) || "",
+
+    text:
+      cleanText(
+        form.textContent
+      ).slice(0, 1000),
+
+    controls:
+      [
+        ...form.querySelectorAll(
+          "input,select,button"
+        )
+      ]
+      .map(el => ({
+        tag:
+          el.tagName,
+
+        type:
+          el.getAttribute(
+            "type"
+          ) || "",
+
+        name:
+          el.getAttribute(
+            "name"
+          ) || "",
+
+        id:
+          el.id || "",
+
+        value:
+          el.getAttribute(
+            "value"
+          ) || "",
+
+        text:
+          cleanText(
+            el.textContent
+          ).slice(0, 200)
+      }))
+  }));
+}
+
+
+/* ========================================
+   propertyという文字があるHTML周辺
+   ======================================== */
+
+function inspectPropertyHtml(html) {
+
+  const hits = [];
+
+  const lower =
+    html.toLowerCase();
+
+  let start = 0;
+
+
+  while (true) {
+
+    const index =
+      lower.indexOf(
+        "property",
+        start
+      );
+
+
+    if (index < 0) {
+      break;
+    }
+
+
+    hits.push(
+      html.slice(
+        Math.max(
+          0,
+          index - 300
+        ),
+        Math.min(
+          html.length,
+          index + 700
+        )
+      )
+    );
+
+
+    start =
+      index + 8;
+
+
+    if (
+      hits.length >= 40
+    ) {
+      break;
+    }
+  }
+
+
+  return hits;
+}
+
+
+/* ========================================
+   スクリプト内property
+   ======================================== */
+
+function inspectScripts(doc) {
+
+  const rows = [];
+
+
+  doc
+    .querySelectorAll(
+      "script"
+    )
+    .forEach(
+      (script, index) => {
+
+        const text =
+          script.textContent || "";
+
+
+        if (
+          !/property/i.test(text)
+        ) {
+          return;
+        }
+
+
+        const contexts =
+          text.match(
+            /.{0,250}property.{0,500}/gi
+          ) || [];
+
+
+        rows.push({
+          script_index:
+            index,
+
+          contexts:
+            contexts.slice(
+              0,
+              20
+            )
+        });
+      }
+    );
+
+
+  return rows;
+}
+
+
+/* ========================================
+   属性文字そのもの
+   ======================================== */
+
+function inspectAttributeTexts(doc) {
+
+  const results = [];
 
   const keywords = [
     "戦",
     "飛",
     "魔",
     "獣",
-    "属性",
-    "property"
+    "属性"
   ];
 
 
-  /* ------------------------------
-     画像要素
-     ------------------------------ */
-
-  const images = [];
-
-  doc
-    .querySelectorAll("img")
-    .forEach(img => {
-
-      const data = {
-        src:
-          img.getAttribute("src") || "",
-
-        alt:
-          img.getAttribute("alt") || "",
-
-        title:
-          img.getAttribute("title") || "",
-
-        class:
-          img.getAttribute("class") || "",
-
-        id:
-          img.id || ""
-      };
-
-
-      const joined =
-        Object.values(data)
-          .join(" ");
-
-      if (
-        keywords.some(
-          k => joined.includes(k)
-        ) ||
-        /property|attribute|type|status|icon/i
-          .test(joined)
-      ) {
-
-        images.push(data);
-      }
-    });
-
-
-  /* ------------------------------
-     属性候補になりそうな全要素
-     ------------------------------ */
-
-  const candidateElements = [];
-
   doc
     .querySelectorAll(
-      "[class],[id],[title],[alt],[data-type],[data-property]"
+      "option,label,a,span,div,td,th"
     )
     .forEach(el => {
-
-      const attrs = {
-        tag:
-          el.tagName,
-
-        id:
-          el.id || "",
-
-        class:
-          el.getAttribute("class") || "",
-
-        title:
-          el.getAttribute("title") || "",
-
-        alt:
-          el.getAttribute("alt") || "",
-
-        data_type:
-          el.getAttribute("data-type") || "",
-
-        data_property:
-          el.getAttribute("data-property") || ""
-      };
-
 
       const text =
         cleanText(
           el.textContent
-        ).slice(0, 250);
+        );
 
 
-      const combined =
-        [
-          ...Object.values(attrs),
-          text
-        ].join(" ");
+      if (
+        !text ||
+        text.length > 100
+      ) {
+        return;
+      }
 
 
       if (
         keywords.some(
-          k => combined.includes(k)
-        ) ||
-        /property|attribute|card_type|cardtype|element/i
-          .test(combined)
+          k =>
+            text === k ||
+            text.includes(
+              k + "属性"
+            ) ||
+            text.includes(
+              "属性" + k
+            )
+        )
       ) {
 
-        candidateElements.push({
-          ...attrs,
-          text
-        });
-      }
-    });
-
-
-  /* ------------------------------
-     「戦・飛・魔・獣」文字の周辺
-     ------------------------------ */
-
-  const bodyText =
-    cleanText(
-      doc.body.textContent
-    );
-
-
-  const textHits = [];
-
-  ["戦", "飛", "魔", "獣"]
-    .forEach(keyword => {
-
-      let start = 0;
-
-      while (true) {
-
-        const index =
-          bodyText.indexOf(
-            keyword,
-            start
-          );
-
-        if (index < 0) {
-          break;
-        }
-
-        textHits.push({
-          keyword,
-
-          context:
-            bodyText.slice(
-              Math.max(
-                0,
-                index - 80
-              ),
-              Math.min(
-                bodyText.length,
-                index + 81
-              )
-            )
-        });
-
-        start =
-          index + 1;
-
-        if (
-          textHits.filter(
-            x =>
-              x.keyword === keyword
-          ).length >= 10
-        ) {
-          break;
-        }
-      }
-    });
-
-
-  /* ------------------------------
-     カードステータス付近HTML
-     ------------------------------ */
-
-  const statusSelectors = [
-    "#card_status",
-    "#page_card_albumDetail",
-    ".card_status",
-    '[id*="status"]',
-    '[class*="status"]',
-    '[id*="property"]',
-    '[class*="property"]'
-  ];
-
-  const statusHtml = [];
-
-  statusSelectors.forEach(selector => {
-
-    doc
-      .querySelectorAll(selector)
-      .forEach(el => {
-
-        statusHtml.push({
-          selector,
+        results.push({
           tag:
             el.tagName,
+
+          text,
 
           id:
             el.id || "",
 
           class:
-            el.getAttribute("class") || "",
+            el.getAttribute(
+              "class"
+            ) || "",
 
-          text:
-            cleanText(
-              el.textContent
-            ).slice(
-              0,
-              1000
-            ),
+          href:
+            el.getAttribute(
+              "href"
+            ) || "",
+
+          value:
+            el.getAttribute(
+              "value"
+            ) || "",
+
+          name:
+            el.getAttribute(
+              "name"
+            ) || "",
 
           html:
             el.outerHTML.slice(
               0,
-              4000
+              1000
             )
         });
-      });
-  });
-
-
-  /* ------------------------------
-     input / hidden値
-     ------------------------------ */
-
-  const inputs = [];
-
-  doc
-    .querySelectorAll(
-      "input,select,option"
-    )
-    .forEach(el => {
-
-      const row = {
-        tag:
-          el.tagName,
-
-        type:
-          el.getAttribute("type") || "",
-
-        name:
-          el.getAttribute("name") || "",
-
-        id:
-          el.id || "",
-
-        value:
-          el.getAttribute("value") || "",
-
-        text:
-          cleanText(
-            el.textContent
-          )
-      };
-
-
-      const joined =
-        Object.values(row)
-          .join(" ");
-
-
-      if (
-        /property|attribute|type|card/i
-          .test(joined) ||
-        keywords.some(
-          k => joined.includes(k)
-        )
-      ) {
-        inputs.push(row);
       }
     });
 
 
-  /* ------------------------------
-     script内候補
-     ------------------------------ */
-
-  const scriptHits = [];
-
-  doc
-    .querySelectorAll("script")
-    .forEach((script, i) => {
-
-      const text =
-        script.textContent || "";
-
-      if (
-        /property|attribute|card[_-]?type/i
-          .test(text)
-      ) {
-
-        const matches =
-          text.match(
-            /.{0,150}(?:property|attribute|card[_-]?type).{0,250}/gi
-          ) || [];
-
-        scriptHits.push({
-          script_index: i,
-          contexts:
-            matches.slice(0, 10)
-        });
-      }
-    });
-
-
-  /* ------------------------------
-     srcから直接推測できそうな属性画像
-     ------------------------------ */
-
-  const probableAttributeImages =
-    images.filter(x =>
-      /property|attribute|type|zokusei|status/i
-        .test(
-          [
-            x.src,
-            x.class,
-            x.id,
-            x.alt,
-            x.title
-          ].join(" ")
-        )
-    );
-
-
-  return {
-    card_no:
-      String(cardNo),
-
-    card_name:
-      cardName || "",
-
-    images,
-
-    probable_attribute_images:
-      probableAttributeImages,
-
-    candidate_elements:
-      candidateElements.slice(0, 150),
-
-    text_hits:
-      textHits,
-
-    inputs,
-
-    script_hits:
-      scriptHits,
-
-    status_html:
-      statusHtml.slice(0, 40)
-  };
+  return results;
 }
 
 
 /* ========================================
-   1枚解析
+   既知候補値の自動テスト
    ======================================== */
 
-async function inspectCard(
-  cardNo,
-  cardName
+async function testPropertyValues(
+  values
 ) {
 
-  const { doc } =
-    await fetchDetail(
-      cardNo
-    );
+  const results = [];
 
-  return inspectAttribute(
-    doc,
-    cardNo,
-    cardName
-  );
+
+  for (
+    const value of values
+  ) {
+
+    const url =
+      "/?M=Card&A=Album" +
+      "&property=" +
+      encodeURIComponent(value) +
+      "&name_text=" +
+      "&rare=" +
+      "&gacha_style=0" +
+      "&year=0" +
+      "&skill_no=" +
+      "&card_no=" +
+      "&p=0";
+
+
+    try {
+
+      const {
+        doc,
+        url: resolvedUrl
+      } =
+        await fetchAlbum(url);
+
+
+      const cards = [];
+
+
+      doc
+        .querySelectorAll(
+          'a[href*="A=AlbumDetail"][href*="card="]'
+        )
+        .forEach(a => {
+
+          try {
+
+            const u =
+              new URL(
+                a.getAttribute(
+                  "href"
+                ),
+                location.href
+              );
+
+
+            const cardNo =
+              u.searchParams.get(
+                "card"
+              );
+
+
+            if (
+              !cardNo
+            ) {
+              return;
+            }
+
+
+            const box =
+              a.closest(
+                ".ui-bar-c"
+              );
+
+
+            const name =
+              cleanText(
+                box
+                  ?.querySelector(
+                    "font"
+                  )
+                  ?.textContent ||
+                ""
+              );
+
+
+            cards.push({
+              card_no:
+                cardNo,
+
+              card_name:
+                name
+            });
+
+          } catch (e) {}
+        });
+
+
+      const uniqueCards =
+        Array.from(
+          new Map(
+            cards.map(
+              x => [
+                x.card_no,
+                x
+              ]
+            )
+          ).values()
+        );
+
+
+      const bodyText =
+        cleanText(
+          doc.body.textContent
+        );
+
+
+      results.push({
+
+        property_value:
+          String(value),
+
+        resolved_url:
+          resolvedUrl,
+
+        card_count_page1:
+          uniqueCards.length,
+
+        first_cards:
+          uniqueCards.slice(
+            0,
+            12
+          ),
+
+        page_title:
+          cleanText(
+            doc.querySelector(
+              "title"
+            )?.textContent
+          ),
+
+        likely_heading:
+          bodyText.slice(
+            0,
+            700
+          )
+      });
+
+
+    } catch (e) {
+
+      results.push({
+        property_value:
+          String(value),
+
+        error:
+          e?.message ||
+          String(e)
+      });
+    }
+
+
+    await new Promise(
+      r =>
+        setTimeout(
+          r,
+          350
+        )
+    );
+  }
+
+
+  return results;
 }
 
 
 /* ========================================
-   JSON出力
+   全診断
    ======================================== */
 
-function exportJson(rows) {
+async function runInspection() {
 
-  const payload = {
+  const {
+    html,
+    doc,
+    url
+  } =
+    await fetchAlbum();
+
+
+  const result = {
+
     meta: {
       type:
-        "jolly_attribute_inspection",
+        "jolly_property_filter_inspection",
 
       version:
         VERSION,
 
-      count:
-        rows.length,
-
-      exported_at:
+      inspected_at:
         new Date()
-          .toISOString()
+          .toISOString(),
+
+      source_url:
+        url
     },
 
-    cards:
-      rows
+
+    links:
+      inspectLinks(
+        doc
+      ),
+
+
+    selects:
+      inspectSelects(
+        doc
+      ),
+
+
+    inputs:
+      inspectInputs(
+        doc
+      ),
+
+
+    forms:
+      inspectForms(
+        doc
+      ),
+
+
+    attribute_text_elements:
+      inspectAttributeTexts(
+        doc
+      ),
+
+
+    property_html_contexts:
+      inspectPropertyHtml(
+        html
+      ),
+
+
+    script_hits:
+      inspectScripts(
+        doc
+      ),
+
+
+    /* 値が小さい整数である可能性を調査 */
+    property_value_tests:
+      await testPropertyValues([
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ])
   };
 
+
+  saveResult(
+    result
+  );
+
+
+  return result;
+}
+
+
+/* ========================================
+   JSON Export
+   ======================================== */
+
+function exportJson(result) {
 
   const blob =
     new Blob(
       [
         JSON.stringify(
-          payload,
+          result,
           null,
           2
         )
@@ -570,23 +870,28 @@ function exportJson(rows) {
 
 
   const url =
-    URL.createObjectURL(blob);
+    URL.createObjectURL(
+      blob
+    );
 
 
   const a =
-    document.createElement("a");
+    document.createElement(
+      "a"
+    );
+
 
   a.href =
     url;
 
+
   a.download =
-    "jolly_attribute_inspection_" +
-    rows.length +
-    ".json";
+    "jolly_property_filter_inspection.json";
 
 
   document.body
     .appendChild(a);
+
 
   a.click();
 
@@ -595,29 +900,34 @@ function exportJson(rows) {
 
   setTimeout(
     () =>
-      URL.revokeObjectURL(url),
+      URL.revokeObjectURL(
+        url
+      ),
     5000
   );
 }
 
 
 /* ========================================
-   パネル
+   UI
    ======================================== */
 
 document
-  .getElementById(PANEL_ID)
+  .getElementById(
+    PANEL_ID
+  )
   ?.remove();
 
 
-let busy = false;
-
-let results =
-  loadResults();
+let busy =
+  false;
 
 
 const root =
-  document.createElement("div");
+  document.createElement(
+    "div"
+  );
+
 
 root.id =
   PANEL_ID;
@@ -677,6 +987,7 @@ root.innerHTML = `
 #${PANEL_ID} .small {
   font-size:12px;
   color:#666;
+  line-height:1.5;
 }
 
 #${PANEL_ID} .box {
@@ -689,7 +1000,8 @@ root.innerHTML = `
 
 #${PANEL_ID} .grid {
   display:grid;
-  grid-template-columns:1fr 1fr;
+  grid-template-columns:
+    1fr 1fr;
   gap:8px;
   margin-top:10px;
 }
@@ -699,7 +1011,7 @@ root.innerHTML = `
   border-radius:12px;
   background:#fff;
   color:#111;
-  padding:11px 9px;
+  padding:11px;
   font-size:14px;
   font-weight:700;
 }
@@ -717,14 +1029,6 @@ root.innerHTML = `
   opacity:.45;
 }
 
-#${PANEL_ID} input {
-  width:100%;
-  padding:11px;
-  border:1px solid #ccd0d5;
-  border-radius:10px;
-  font-size:16px;
-}
-
 #${PANEL_ID} .close {
   width:36px;
   height:36px;
@@ -738,8 +1042,8 @@ root.innerHTML = `
   color:#fff;
   padding:10px;
   border-radius:12px;
-  min-height:100px;
-  max-height:220px;
+  min-height:110px;
+  max-height:230px;
   overflow:auto;
   font:
     12px
@@ -758,7 +1062,7 @@ root.innerHTML = `
     <div>
 
       <div class="title">
-        JOLLY 属性構造検証
+        JOLLY 属性フィルタ値特定
       </div>
 
       <div class="small">
@@ -767,9 +1071,10 @@ root.innerHTML = `
 
     </div>
 
+
     <button
       class="close"
-      id="ja-close">
+      id="jpf-close">
       ×
     </button>
 
@@ -779,32 +1084,18 @@ root.innerHTML = `
   <div class="box">
 
     <div class="small">
-      目録：
-      ${catalog.length}件
+
+      Album一覧ページから
+      property= の値、
+      select / option / radio /
+      form / link を調査します。
+
+      <br><br>
+
+      さらに
+      property=0〜12を自動テストします。
+
     </div>
-
-    <div class="small">
-      保存済み検証：
-      <b id="ja-count">
-        ${results.length}
-      </b>
-      件
-    </div>
-
-  </div>
-
-
-  <div class="box">
-
-    <div class="small">
-      任意card_no
-    </div>
-
-    <input
-      id="ja-cardno"
-      inputmode="numeric"
-      placeholder="例：30"
-    >
 
   </div>
 
@@ -813,23 +1104,15 @@ root.innerHTML = `
 
     <button
       class="primary"
-      id="ja-first10">
+      id="jpf-run">
 
-      先頭10枚を検証
-
-    </button>
-
-
-    <button
-      id="ja-single">
-
-      指定カードを検証
+      属性フィルタを解析
 
     </button>
 
 
     <button
-      id="ja-export">
+      id="jpf-export">
 
       JSONを書き出す
 
@@ -838,15 +1121,15 @@ root.innerHTML = `
 
     <button
       class="danger"
-      id="ja-reset">
+      id="jpf-reset">
 
-      検証結果を削除
+      結果を削除
 
     </button>
 
 
     <button
-      id="ja-close2">
+      id="jpf-close2">
 
       閉じる
 
@@ -863,7 +1146,7 @@ root.innerHTML = `
 
     <div
       class="log"
-      id="ja-log">
+      id="jpf-log">
 
       準備完了
 
@@ -876,263 +1159,145 @@ root.innerHTML = `
 
 
 document.body
-  .appendChild(root);
+  .appendChild(
+    root
+  );
 
 
 const $ =
   q =>
-    root.querySelector(q);
+    root.querySelector(
+      q
+    );
 
 
 function log(message) {
 
-  const t =
+  const time =
     new Date()
       .toLocaleTimeString();
 
-  $("#ja-log")
+
+  $("#jpf-log")
     .textContent =
     "[" +
-    t +
+    time +
     "] " +
     message +
     "\n" +
-    $("#ja-log")
+    $("#jpf-log")
       .textContent;
 }
 
 
 function render() {
 
-  results =
-    loadResults();
+  const saved =
+    loadResult();
 
-  $("#ja-count")
-    .textContent =
-    results.length;
 
-  $("#ja-first10")
+  $("#jpf-run")
     .disabled =
     busy;
 
-  $("#ja-single")
-    .disabled =
-    busy;
 
-  $("#ja-export")
+  $("#jpf-export")
     .disabled =
     busy ||
-    !results.length;
+    !saved;
 
-  $("#ja-reset")
+
+  $("#jpf-reset")
     .disabled =
     busy;
 }
 
 
 /* ========================================
-   先頭10枚
+   解析ボタン
    ======================================== */
 
-$("#ja-first10")
+$("#jpf-run")
 .onclick =
 async () => {
 
-  if (busy) return;
-
-  if (
-    catalog.length < 10
-  ) {
-
-    log(
-      "目録を読み込めません"
-    );
-
+  if (busy) {
     return;
   }
 
 
   busy = true;
+
   render();
-
-
-  const newRows = [];
 
 
   try {
 
-    const targets =
-      catalog.slice(
-        0,
-        10
-      );
+    log(
+      "Album一覧を解析中…"
+    );
 
 
-    for (
-      let i = 0;
-      i < targets.length;
-      i++
-    ) {
-
-      const card =
-        targets[i];
+    const result =
+      await runInspection();
 
 
-      log(
-        `${i + 1}/10 ` +
-        `${card.card_no} ` +
-        `${card.card_name}`
-      );
+    log(
+      "propertyリンク：" +
+      result.links.length +
+      "件"
+    );
 
 
-      try {
-
-        const row =
-          await inspectCard(
-            card.card_no,
-            card.card_name
-          );
+    log(
+      "select：" +
+      result.selects.length +
+      "件"
+    );
 
 
-        newRows.push(
-          row
-        );
+    log(
+      "input：" +
+      result.inputs.length +
+      "件"
+    );
 
 
-        log(
-          `OK ` +
-          `images=${row.images.length} ` +
-          `candidates=${row.candidate_elements.length}`
-        );
+    log(
+      "属性文字候補：" +
+      result.attribute_text_elements.length +
+      "件"
+    );
 
 
-      } catch(e) {
-
-        log(
-          "ERROR " +
-          card.card_no +
-          ": " +
+    const summary =
+      result.property_value_tests
+        .map(x =>
+          "property=" +
+          x.property_value +
+          " → " +
           (
-            e?.message ||
-            String(e)
+            x.error
+              ? "ERROR"
+              : x.card_count_page1 +
+                "件"
           )
-        );
-      }
+        )
+        .join("\n");
 
 
-      await sleep(
-        WAIT_MS
-      );
-    }
-
-
-    results =
-      mergeRows(
-        loadResults(),
-        newRows
-      );
-
-
-    saveResults(
-      results
-    );
+    log(summary);
 
 
     log(
-      "10枚検証完了"
+      "解析完了。JSONを書き出してください。"
     );
 
 
-  } finally {
-
-    busy = false;
-    render();
-  }
-};
-
-
-/* ========================================
-   任意カード
-   ======================================== */
-
-$("#ja-single")
-.onclick =
-async () => {
-
-  if (busy) return;
-
-
-  const cardNo =
-    cleanText(
-      $("#ja-cardno").value
-    );
-
-
-  if (!cardNo) {
+  } catch (e) {
 
     log(
-      "card_noを入力してください"
-    );
-
-    return;
-  }
-
-
-  const catalogRow =
-    catalog.find(
-      x =>
-        String(x.card_no) ===
-        String(cardNo)
-    );
-
-
-  busy = true;
-  render();
-
-
-  try {
-
-    log(
-      "取得中：" +
-      cardNo
-    );
-
-
-    const row =
-      await inspectCard(
-        cardNo,
-        catalogRow
-          ?.card_name ||
-        ""
-      );
-
-
-    results =
-      mergeRows(
-        loadResults(),
-        [row]
-      );
-
-
-    saveResults(
-      results
-    );
-
-
-    log(
-      "OK " +
-      cardNo +
-      " / images=" +
-      row.images.length +
-      " / candidates=" +
-      row.candidate_elements.length
-    );
-
-
-  } catch(e) {
-
-    log(
-      "ERROR " +
+      "ERROR: " +
       (
         e?.message ||
         String(e)
@@ -1143,25 +1308,38 @@ async () => {
   } finally {
 
     busy = false;
+
     render();
   }
 };
 
 
 /* ========================================
-   Export
+   export
    ======================================== */
 
-$("#ja-export")
+$("#jpf-export")
 .onclick =
 () => {
 
-  results =
-    loadResults();
+  const saved =
+    loadResult();
+
+
+  if (!saved) {
+
+    log(
+      "解析結果がありません"
+    );
+
+    return;
+  }
+
 
   exportJson(
-    results
+    saved
   );
+
 
   log(
     "JSONを書き出しました"
@@ -1170,16 +1348,16 @@ $("#ja-export")
 
 
 /* ========================================
-   Reset
+   reset
    ======================================== */
 
-$("#ja-reset")
+$("#jpf-reset")
 .onclick =
 () => {
 
   if (
     !confirm(
-      "属性検証結果だけを削除しますか？"
+      "属性フィルタ検証結果を削除しますか？"
     )
   ) {
     return;
@@ -1191,23 +1369,22 @@ $("#ja-reset")
   );
 
 
-  results = [];
-
   render();
 
+
   log(
-    "検証結果を削除しました"
+    "結果を削除しました"
   );
 };
 
 
-$("#ja-close")
+$("#jpf-close")
 .onclick =
 () =>
   root.remove();
 
 
-$("#ja-close2")
+$("#jpf-close2")
 .onclick =
 () =>
   root.remove();
@@ -1227,10 +1404,8 @@ if (
       panel: true,
       version:
         VERSION,
-      catalog_count:
-        catalog.length,
-      inspection_count:
-        results.length
+      saved:
+        !!loadResult()
     })
   );
 }
