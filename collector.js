@@ -1,72 +1,326 @@
 (async () => {
 "use strict";
 
-const VERSION = "property-filter-inspector-v1.0";
-const PANEL_ID = "jolly-property-filter-inspector";
-const STORAGE_KEY = "jolly_property_filter_inspector_v1";
+/* =========================================================
+   JOLLY CARD PROPERTY COLLECTOR
+   property-collector-v1.0
+
+   属性対応
+   1 = 戦
+   2 = 魔
+   3 = 飛
+   4 = 獣
+   9 = 船
+
+   ・各属性のAlbum一覧を巡回
+   ・card_noだけ取得
+   ・進捗保存
+   ・途中再開
+   ・エラー記録
+   ・JSON書き出し
+   ========================================================= */
+
+const VERSION = "property-collector-v1.0";
+
+const PANEL_ID =
+  "jolly-property-collector";
+
+const STORAGE_KEY =
+  "jolly_card_properties_v1";
+
+const WAIT_MS = 350;
+
+
+/* =========================================================
+   属性定義
+   ========================================================= */
+
+const PROPERTIES = [
+  {
+    id: 1,
+    name: "戦"
+  },
+  {
+    id: 2,
+    name: "魔"
+  },
+  {
+    id: 3,
+    name: "飛"
+  },
+  {
+    id: 4,
+    name: "獣"
+  },
+  {
+    id: 9,
+    name: "船"
+  }
+];
+
+
+/* =========================================================
+   共通
+   ========================================================= */
+
+const sleep = ms =>
+  new Promise(resolve =>
+    setTimeout(resolve, ms)
+  );
+
 
 function cleanText(v) {
+
   return String(v ?? "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 
-/* ========================================
-   保存
-   ======================================== */
+/* =========================================================
+   保存状態
+   ========================================================= */
 
-function saveResult(data) {
+function emptyState() {
+
+  return {
+    version:
+      VERSION,
+
+    current_property_index:
+      0,
+
+    current_page:
+      0,
+
+    finished:
+      false,
+
+    cards: [],
+
+    property_summary: {},
+
+    errors: [],
+
+    updated_at:
+      null
+  };
+}
+
+
+function loadState() {
+
+  try {
+
+    const saved =
+      JSON.parse(
+        localStorage.getItem(
+          STORAGE_KEY
+        ) || "null"
+      );
+
+
+    if (
+      saved &&
+      Array.isArray(saved.cards)
+    ) {
+
+      return saved;
+    }
+
+  } catch(e) {}
+
+
+  return emptyState();
+}
+
+
+function saveState(state) {
+
+  state.version =
+    VERSION;
+
+  state.updated_at =
+    new Date()
+      .toISOString();
+
+
   localStorage.setItem(
     STORAGE_KEY,
-    JSON.stringify(data)
+    JSON.stringify(state)
   );
 }
 
 
-function loadResult() {
-  try {
-    return JSON.parse(
-      localStorage.getItem(STORAGE_KEY) || "null"
-    );
-  } catch (e) {
-    return null;
+/* =========================================================
+   card_no重複排除
+   ========================================================= */
+
+function mergeCards(cards) {
+
+  const map =
+    new Map();
+
+
+  for (
+    const card of cards
+  ) {
+
+    if (
+      !card ||
+      !card.card_no
+    ) {
+      continue;
+    }
+
+
+    const key =
+      String(
+        card.card_no
+      );
+
+
+    /*
+     * 原則1カード=1属性。
+     *
+     * 万一複数属性に出た場合でも
+     * データを捨てずpropertiesとして残す。
+     */
+
+    if (
+      !map.has(key)
+    ) {
+
+      map.set(
+        key,
+        {
+          card_no:
+            key,
+
+          card_name:
+            card.card_name || "",
+
+          property_id:
+            card.property_id,
+
+          property:
+            card.property,
+
+          properties: [
+            {
+              property_id:
+                card.property_id,
+
+              property:
+                card.property
+            }
+          ]
+        }
+      );
+
+    } else {
+
+      const existing =
+        map.get(key);
+
+
+      const already =
+        existing.properties
+          .some(
+            x =>
+              Number(
+                x.property_id
+              ) ===
+              Number(
+                card.property_id
+              )
+          );
+
+
+      if (!already) {
+
+        existing.properties.push({
+          property_id:
+            card.property_id,
+
+          property:
+            card.property
+        });
+      }
+    }
   }
+
+
+  return [
+    ...map.values()
+  ]
+  .sort(
+    (a,b) =>
+      Number(a.card_no) -
+      Number(b.card_no)
+  );
 }
 
 
-/* ========================================
-   Album取得
-   ======================================== */
+/* =========================================================
+   Album URL
+   ========================================================= */
 
-async function fetchAlbum(url = null) {
+function buildUrl(
+  propertyId,
+  page
+) {
 
-  const target =
-    url ||
+  return (
     "/?M=Card&A=Album" +
     "&property=" +
+    encodeURIComponent(
+      propertyId
+    ) +
     "&name_text=" +
     "&rare=" +
     "&gacha_style=0" +
     "&year=0" +
     "&skill_no=" +
     "&card_no=" +
-    "&p=0";
+    "&p=" +
+    encodeURIComponent(
+      page
+    )
+  );
+}
 
+
+/* =========================================================
+   Album取得
+   ========================================================= */
+
+async function fetchAlbum(
+  propertyId,
+  page
+) {
 
   const response =
     await fetch(
-      target,
+      buildUrl(
+        propertyId,
+        page
+      ),
       {
-        credentials: "same-origin",
-        cache: "no-store"
+        credentials:
+          "same-origin",
+
+        cache:
+          "no-store"
       }
     );
 
 
   if (!response.ok) {
+
     throw new Error(
-      "HTTP " + response.status
+      "HTTP " +
+      response.status
     );
   }
 
@@ -76,10 +330,17 @@ async function fetchAlbum(url = null) {
 
 
   if (
-    html.includes("ログイン情報入力") ||
-    html.includes("auth001") ||
-    html.includes("module=auth")
+    html.includes(
+      "ログイン情報入力"
+    ) ||
+    html.includes(
+      "auth001"
+    ) ||
+    html.includes(
+      "module=auth"
+    )
   ) {
+
     throw new Error(
       "ログインセッション切れ"
     );
@@ -96,768 +357,528 @@ async function fetchAlbum(url = null) {
 
   return {
     html,
-    doc,
-    url:
-      new URL(
-        target,
-        location.href
-      ).href
+    doc
   };
 }
 
 
-/* ========================================
-   property関連リンク
-   ======================================== */
+/* =========================================================
+   最大ページ検出
+   ========================================================= */
 
-function inspectLinks(doc) {
+function detectTotalPages(
+  doc,
+  propertyId
+) {
 
-  const rows = [];
+  let maxPage = 0;
 
 
   doc
-    .querySelectorAll("a[href]")
+    .querySelectorAll(
+      'a[href*="A=Album"][href*="p="]'
+    )
     .forEach(a => {
-
-      const href =
-        a.getAttribute("href") || "";
-
-
-      if (
-        !href.includes("property")
-      ) {
-        return;
-      }
-
 
       try {
 
         const u =
           new URL(
-            href,
+            a.getAttribute(
+              "href"
+            ),
             location.href
           );
 
 
-        rows.push({
-          text:
-            cleanText(
-              a.textContent
-            ),
+        const property =
+          u.searchParams.get(
+            "property"
+          );
 
-          href:
-            u.href,
 
-          property:
+        if (
+          String(property) !==
+          String(propertyId)
+        ) {
+          return;
+        }
+
+
+        const page =
+          Number(
             u.searchParams.get(
-              "property"
-            ),
+              "p"
+            )
+          );
 
-          M:
-            u.searchParams.get("M"),
 
-          A:
-            u.searchParams.get("A"),
+        if (
+          Number.isFinite(page)
+        ) {
 
-          page:
-            u.searchParams.get("p")
-        });
+          maxPage =
+            Math.max(
+              maxPage,
+              page
+            );
+        }
 
-      } catch (e) {
-
-        rows.push({
-          text:
-            cleanText(
-              a.textContent
-            ),
-
-          href,
-
-          property:
-            null
-        });
-      }
+      } catch(e) {}
     });
 
 
-  return rows;
+  return maxPage + 1;
 }
 
 
-/* ========================================
-   select / option
-   ======================================== */
+/* =========================================================
+   カード抽出
+   ========================================================= */
 
-function inspectSelects(doc) {
-
-  return [
-    ...doc.querySelectorAll(
-      "select"
-    )
-  ]
-  .map(select => ({
-
-    name:
-      select.getAttribute(
-        "name"
-      ) || "",
-
-    id:
-      select.id || "",
-
-    class:
-      select.getAttribute(
-        "class"
-      ) || "",
-
-    value:
-      select.value || "",
-
-    options:
-      [
-        ...select.querySelectorAll(
-          "option"
-        )
-      ]
-      .map(option => ({
-
-        text:
-          cleanText(
-            option.textContent
-          ),
-
-        value:
-          option.getAttribute(
-            "value"
-          ),
-
-        selected:
-          option.hasAttribute(
-            "selected"
-          )
-      }))
-  }));
-}
-
-
-/* ========================================
-   radio / checkbox / hidden
-   ======================================== */
-
-function inspectInputs(doc) {
-
-  return [
-    ...doc.querySelectorAll(
-      "input"
-    )
-  ]
-  .map(input => ({
-
-    type:
-      input.getAttribute(
-        "type"
-      ) || "",
-
-    name:
-      input.getAttribute(
-        "name"
-      ) || "",
-
-    id:
-      input.id || "",
-
-    value:
-      input.getAttribute(
-        "value"
-      ) || "",
-
-    checked:
-      input.checked || false
-  }))
-  .filter(row => {
-
-    const joined =
-      Object.values(row)
-        .join(" ");
-
-    return (
-      /property/i.test(joined) ||
-      [
-        "radio",
-        "checkbox",
-        "hidden"
-      ].includes(row.type)
-    );
-  });
-}
-
-
-/* ========================================
-   form
-   ======================================== */
-
-function inspectForms(doc) {
-
-  return [
-    ...doc.querySelectorAll(
-      "form"
-    )
-  ]
-  .map(form => ({
-
-    action:
-      form.getAttribute(
-        "action"
-      ) || "",
-
-    method:
-      form.getAttribute(
-        "method"
-      ) || "",
-
-    id:
-      form.id || "",
-
-    name:
-      form.getAttribute(
-        "name"
-      ) || "",
-
-    text:
-      cleanText(
-        form.textContent
-      ).slice(0, 1000),
-
-    controls:
-      [
-        ...form.querySelectorAll(
-          "input,select,button"
-        )
-      ]
-      .map(el => ({
-        tag:
-          el.tagName,
-
-        type:
-          el.getAttribute(
-            "type"
-          ) || "",
-
-        name:
-          el.getAttribute(
-            "name"
-          ) || "",
-
-        id:
-          el.id || "",
-
-        value:
-          el.getAttribute(
-            "value"
-          ) || "",
-
-        text:
-          cleanText(
-            el.textContent
-          ).slice(0, 200)
-      }))
-  }));
-}
-
-
-/* ========================================
-   propertyという文字があるHTML周辺
-   ======================================== */
-
-function inspectPropertyHtml(html) {
-
-  const hits = [];
-
-  const lower =
-    html.toLowerCase();
-
-  let start = 0;
-
-
-  while (true) {
-
-    const index =
-      lower.indexOf(
-        "property",
-        start
-      );
-
-
-    if (index < 0) {
-      break;
-    }
-
-
-    hits.push(
-      html.slice(
-        Math.max(
-          0,
-          index - 300
-        ),
-        Math.min(
-          html.length,
-          index + 700
-        )
-      )
-    );
-
-
-    start =
-      index + 8;
-
-
-    if (
-      hits.length >= 40
-    ) {
-      break;
-    }
-  }
-
-
-  return hits;
-}
-
-
-/* ========================================
-   スクリプト内property
-   ======================================== */
-
-function inspectScripts(doc) {
+function extractCards(
+  doc,
+  property
+) {
 
   const rows = [];
 
 
   doc
     .querySelectorAll(
-      "script"
+      'a[href*="A=AlbumDetail"][href*="card="]'
     )
-    .forEach(
-      (script, index) => {
+    .forEach(a => {
 
-        const text =
-          script.textContent || "";
+      try {
+
+        const u =
+          new URL(
+            a.getAttribute(
+              "href"
+            ),
+            location.href
+          );
 
 
-        if (
-          !/property/i.test(text)
-        ) {
+        const cardNo =
+          u.searchParams.get(
+            "card"
+          );
+
+
+        if (!cardNo) {
           return;
         }
 
 
-        const contexts =
-          text.match(
-            /.{0,250}property.{0,500}/gi
-          ) || [];
+        const box =
+          a.closest(
+            ".ui-bar-c"
+          );
+
+
+        const name =
+          cleanText(
+            box
+              ?.querySelector(
+                "font"
+              )
+              ?.textContent ||
+            ""
+          );
 
 
         rows.push({
-          script_index:
-            index,
+          card_no:
+            String(
+              cardNo
+            ),
 
-          contexts:
-            contexts.slice(
-              0,
-              20
-            )
+          card_name:
+            name,
+
+          property_id:
+            property.id,
+
+          property:
+            property.name
         });
-      }
-    );
 
-
-  return rows;
-}
-
-
-/* ========================================
-   属性文字そのもの
-   ======================================== */
-
-function inspectAttributeTexts(doc) {
-
-  const results = [];
-
-  const keywords = [
-    "戦",
-    "飛",
-    "魔",
-    "獣",
-    "属性"
-  ];
-
-
-  doc
-    .querySelectorAll(
-      "option,label,a,span,div,td,th"
-    )
-    .forEach(el => {
-
-      const text =
-        cleanText(
-          el.textContent
-        );
-
-
-      if (
-        !text ||
-        text.length > 100
-      ) {
-        return;
-      }
-
-
-      if (
-        keywords.some(
-          k =>
-            text === k ||
-            text.includes(
-              k + "属性"
-            ) ||
-            text.includes(
-              "属性" + k
-            )
-        )
-      ) {
-
-        results.push({
-          tag:
-            el.tagName,
-
-          text,
-
-          id:
-            el.id || "",
-
-          class:
-            el.getAttribute(
-              "class"
-            ) || "",
-
-          href:
-            el.getAttribute(
-              "href"
-            ) || "",
-
-          value:
-            el.getAttribute(
-              "value"
-            ) || "",
-
-          name:
-            el.getAttribute(
-              "name"
-            ) || "",
-
-          html:
-            el.outerHTML.slice(
-              0,
-              1000
-            )
-        });
-      }
+      } catch(e) {}
     });
 
 
-  return results;
+  return [
+    ...new Map(
+      rows.map(
+        x => [
+          x.card_no,
+          x
+        ]
+      )
+    ).values()
+  ];
 }
 
 
-/* ========================================
-   既知候補値の自動テスト
-   ======================================== */
+/* =========================================================
+   属性1種類の全ページ取得
+   ========================================================= */
 
-async function testPropertyValues(
-  values
+async function collectCurrentProperty(
+  log,
+  render
 ) {
 
-  const results = [];
+  let state =
+    loadState();
 
 
-  for (
-    const value of values
+  const property =
+    PROPERTIES[
+      state.current_property_index
+    ];
+
+
+  if (!property) {
+
+    state.finished =
+      true;
+
+    saveState(
+      state
+    );
+
+    return;
+  }
+
+
+  /*
+   * 最初のページを取得して
+   * 総ページ数を把握
+   */
+
+  let firstResult =
+    null;
+
+
+  if (
+    state.current_page === 0
   ) {
 
-    const url =
-      "/?M=Card&A=Album" +
-      "&property=" +
-      encodeURIComponent(value) +
-      "&name_text=" +
-      "&rare=" +
-      "&gacha_style=0" +
-      "&year=0" +
-      "&skill_no=" +
-      "&card_no=" +
-      "&p=0";
+    log(
+      `${property.name}属性のページ数確認中…`
+    );
 
 
-    try {
-
-      const {
-        doc,
-        url: resolvedUrl
-      } =
-        await fetchAlbum(url);
+    firstResult =
+      await fetchAlbum(
+        property.id,
+        0
+      );
 
 
-      const cards = [];
+    const totalPages =
+      detectTotalPages(
+        firstResult.doc,
+        property.id
+      );
 
 
-      doc
-        .querySelectorAll(
-          'a[href*="A=AlbumDetail"][href*="card="]'
-        )
-        .forEach(a => {
+    state.property_summary[
+      property.name
+    ] = {
+      property_id:
+        property.id,
 
-          try {
+      total_pages:
+        totalPages,
 
-            const u =
-              new URL(
-                a.getAttribute(
-                  "href"
-                ),
-                location.href
-              );
+      collected_pages:
+        0,
 
-
-            const cardNo =
-              u.searchParams.get(
-                "card"
-              );
+      card_count:
+        0
+    };
 
 
-            if (
-              !cardNo
-            ) {
-              return;
-            }
-
-
-            const box =
-              a.closest(
-                ".ui-bar-c"
-              );
-
-
-            const name =
-              cleanText(
-                box
-                  ?.querySelector(
-                    "font"
-                  )
-                  ?.textContent ||
-                ""
-              );
-
-
-            cards.push({
-              card_no:
-                cardNo,
-
-              card_name:
-                name
-            });
-
-          } catch (e) {}
-        });
-
-
-      const uniqueCards =
-        Array.from(
-          new Map(
-            cards.map(
-              x => [
-                x.card_no,
-                x
-              ]
-            )
-          ).values()
-        );
-
-
-      const bodyText =
-        cleanText(
-          doc.body.textContent
-        );
-
-
-      results.push({
-
-        property_value:
-          String(value),
-
-        resolved_url:
-          resolvedUrl,
-
-        card_count_page1:
-          uniqueCards.length,
-
-        first_cards:
-          uniqueCards.slice(
-            0,
-            12
-          ),
-
-        page_title:
-          cleanText(
-            doc.querySelector(
-              "title"
-            )?.textContent
-          ),
-
-        likely_heading:
-          bodyText.slice(
-            0,
-            700
-          )
-      });
-
-
-    } catch (e) {
-
-      results.push({
-        property_value:
-          String(value),
-
-        error:
-          e?.message ||
-          String(e)
-      });
-    }
-
-
-    await new Promise(
-      r =>
-        setTimeout(
-          r,
-          350
-        )
+    saveState(
+      state
     );
   }
 
 
-  return results;
+  const summary =
+    state.property_summary[
+      property.name
+    ];
+
+
+  const totalPages =
+    summary.total_pages;
+
+
+  for (
+    let page =
+      state.current_page;
+
+    page <
+      totalPages;
+
+    page++
+  ) {
+
+    try {
+
+      log(
+        `${property.name} ` +
+        `${page + 1}/${totalPages}ページ取得中…`
+      );
+
+
+      let result;
+
+
+      if (
+        page === 0 &&
+        firstResult
+      ) {
+
+        result =
+          firstResult;
+
+      } else {
+
+        result =
+          await fetchAlbum(
+            property.id,
+            page
+          );
+      }
+
+
+      const cards =
+        extractCards(
+          result.doc,
+          property
+        );
+
+
+      state.cards =
+        mergeCards([
+          ...state.cards,
+          ...cards
+        ]);
+
+
+      summary.collected_pages =
+        page + 1;
+
+
+      const countForProperty =
+        state.cards
+          .filter(
+            x =>
+              x.properties
+                .some(
+                  p =>
+                    Number(
+                      p.property_id
+                    ) ===
+                    Number(
+                      property.id
+                    )
+                )
+          )
+          .length;
+
+
+      summary.card_count =
+        countForProperty;
+
+
+      state.current_page =
+        page + 1;
+
+
+      saveState(
+        state
+      );
+
+
+      await render();
+
+
+      log(
+        `${property.name} ` +
+        `${cards.length}件 / ` +
+        `属性累計${countForProperty}件`
+      );
+
+
+      await sleep(
+        WAIT_MS
+      );
+
+
+    } catch(e) {
+
+      state.errors.push({
+
+        property_id:
+          property.id,
+
+        property:
+          property.name,
+
+        page,
+
+        error:
+          e?.message ||
+          String(e),
+
+        failed_at:
+          new Date()
+            .toISOString()
+      });
+
+
+      saveState(
+        state
+      );
+
+
+      throw e;
+    }
+  }
+
+
+  /*
+   * この属性完了
+   */
+
+  log(
+    `${property.name}属性完了：` +
+    `${summary.card_count}件`
+  );
+
+
+  state.current_property_index++;
+
+  state.current_page = 0;
+
+
+  if (
+    state.current_property_index >=
+    PROPERTIES.length
+  ) {
+
+    state.finished =
+      true;
+  }
+
+
+  saveState(
+    state
+  );
+
+
+  await render();
 }
 
 
-/* ========================================
-   全診断
-   ======================================== */
+/* =========================================================
+   全属性を続けて取得
+   ========================================================= */
 
-async function runInspection() {
+async function collectAll(
+  log,
+  render
+) {
 
-  const {
-    html,
-    doc,
-    url
-  } =
-    await fetchAlbum();
+  let state =
+    loadState();
 
 
-  const result = {
+  while (
+    !state.finished
+  ) {
+
+    await collectCurrentProperty(
+      log,
+      render
+    );
+
+
+    state =
+      loadState();
+
+
+    await sleep(
+      500
+    );
+  }
+}
+
+
+/* =========================================================
+   JSON Export
+   ========================================================= */
+
+function exportJson(
+  state
+) {
+
+  const payload = {
 
     meta: {
+
       type:
-        "jolly_property_filter_inspection",
+        "jolly_card_properties",
 
       version:
         VERSION,
 
-      inspected_at:
+      total_cards:
+        state.cards.length,
+
+      finished:
+        state.finished,
+
+      property_summary:
+        state.property_summary,
+
+      error_count:
+        state.errors.length,
+
+      exported_at:
         new Date()
           .toISOString(),
 
-      source_url:
-        url
+      source:
+        location.origin
     },
 
 
-    links:
-      inspectLinks(
-        doc
-      ),
+    properties:
+      PROPERTIES,
 
 
-    selects:
-      inspectSelects(
-        doc
-      ),
+    cards:
+      state.cards,
 
 
-    inputs:
-      inspectInputs(
-        doc
-      ),
-
-
-    forms:
-      inspectForms(
-        doc
-      ),
-
-
-    attribute_text_elements:
-      inspectAttributeTexts(
-        doc
-      ),
-
-
-    property_html_contexts:
-      inspectPropertyHtml(
-        html
-      ),
-
-
-    script_hits:
-      inspectScripts(
-        doc
-      ),
-
-
-    /* 値が小さい整数である可能性を調査 */
-    property_value_tests:
-      await testPropertyValues([
-        0,
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        8,
-        9,
-        10,
-        11,
-        12
-      ])
+    errors:
+      state.errors
   };
 
-
-  saveResult(
-    result
-  );
-
-
-  return result;
-}
-
-
-/* ========================================
-   JSON Export
-   ======================================== */
-
-function exportJson(result) {
 
   const blob =
     new Blob(
       [
         JSON.stringify(
-          result,
+          payload,
           null,
           2
         )
@@ -886,11 +907,15 @@ function exportJson(result) {
 
 
   a.download =
-    "jolly_property_filter_inspection.json";
+    "jolly_card_properties_" +
+    state.cards.length +
+    ".json";
 
 
   document.body
-    .appendChild(a);
+    .appendChild(
+      a
+    );
 
 
   a.click();
@@ -908,9 +933,9 @@ function exportJson(result) {
 }
 
 
-/* ========================================
+/* =========================================================
    UI
-   ======================================== */
+   ========================================================= */
 
 document
   .getElementById(
@@ -938,113 +963,205 @@ root.innerHTML = `
 <style>
 
 #${PANEL_ID} {
+
   position:fixed;
+
   inset:0;
+
   z-index:2147483647;
-  background:rgba(0,0,0,.58);
+
+  background:
+    rgba(0,0,0,.58);
+
   display:flex;
+
   align-items:flex-end;
+
   justify-content:center;
+
   font-family:
     -apple-system,
     BlinkMacSystemFont,
     sans-serif;
+
   color:#111;
+
   text-shadow:none;
 }
 
+
 #${PANEL_ID} * {
-  box-sizing:border-box;
+
+  box-sizing:
+    border-box;
 }
 
+
 #${PANEL_ID} .panel {
+
   width:100%;
+
   max-width:700px;
+
   max-height:90vh;
+
   overflow:auto;
+
   background:#f5f6f8;
-  border-radius:20px 20px 0 0;
+
+  border-radius:
+    20px 20px 0 0;
+
   padding:
     14px
     14px
     calc(
       16px +
-      env(safe-area-inset-bottom)
+      env(
+        safe-area-inset-bottom
+      )
     );
 }
 
+
 #${PANEL_ID} .head {
+
   display:flex;
-  justify-content:space-between;
+
+  justify-content:
+    space-between;
+
   align-items:center;
 }
 
+
 #${PANEL_ID} .title {
+
   font-size:18px;
+
   font-weight:800;
 }
 
+
 #${PANEL_ID} .small {
+
   font-size:12px;
+
   color:#666;
+
   line-height:1.5;
 }
 
+
+#${PANEL_ID} .big {
+
+  font-size:24px;
+
+  font-weight:800;
+}
+
+
 #${PANEL_ID} .box {
+
   background:#fff;
-  border:1px solid #ddd;
+
+  border:
+    1px solid #ddd;
+
   border-radius:14px;
+
   padding:12px;
+
   margin-top:10px;
 }
+
 
 #${PANEL_ID} .grid {
+
   display:grid;
+
   grid-template-columns:
     1fr 1fr;
+
   gap:8px;
+
   margin-top:10px;
 }
 
+
 #${PANEL_ID} button {
-  border:1px solid #ccd0d5;
+
+  border:
+    1px solid #ccd0d5;
+
   border-radius:12px;
+
   background:#fff;
+
   color:#111;
+
   padding:11px;
+
   font-size:14px;
+
   font-weight:700;
 }
 
+
 #${PANEL_ID} button.primary {
-  background:#111827;
+
+  background:
+    #111827;
+
   color:#fff;
 }
 
+
 #${PANEL_ID} button.danger {
+
   color:#b42318;
 }
 
+
 #${PANEL_ID} button:disabled {
+
   opacity:.45;
 }
 
+
 #${PANEL_ID} .close {
+
   width:36px;
+
   height:36px;
+
   padding:0;
-  border-radius:999px;
+
+  border-radius:
+    999px;
 }
 
+
 #${PANEL_ID} .log {
-  white-space:pre-wrap;
-  background:#111827;
+
+  white-space:
+    pre-wrap;
+
+  background:
+    #111827;
+
   color:#fff;
+
   padding:10px;
+
   border-radius:12px;
-  min-height:110px;
-  max-height:230px;
+
+  min-height:120px;
+
+  max-height:240px;
+
   overflow:auto;
+
   font:
     12px
     ui-monospace,
@@ -1057,12 +1174,13 @@ root.innerHTML = `
 
 <div class="panel">
 
+
   <div class="head">
 
     <div>
 
       <div class="title">
-        JOLLY 属性フィルタ値特定
+        JOLLY カード属性収集
       </div>
 
       <div class="small">
@@ -1074,7 +1192,7 @@ root.innerHTML = `
 
     <button
       class="close"
-      id="jpf-close">
+      id="jpc-close">
       ×
     </button>
 
@@ -1084,16 +1202,44 @@ root.innerHTML = `
   <div class="box">
 
     <div class="small">
+      属性付与済みカード
+    </div>
 
-      Album一覧ページから
-      property= の値、
-      select / option / radio /
-      form / link を調査します。
 
-      <br><br>
+    <div class="big">
 
-      さらに
-      property=0〜12を自動テストします。
+      <span
+        id="jpc-count">
+        0
+      </span>
+
+      / 1359
+
+    </div>
+
+
+    <div
+      class="small"
+      id="jpc-status">
+
+      状態確認中…
+
+    </div>
+
+  </div>
+
+
+  <div class="box">
+
+    <div
+      class="small"
+      id="jpc-summary">
+
+      戦：未取得<br>
+      魔：未取得<br>
+      飛：未取得<br>
+      獣：未取得<br>
+      船：未取得
 
     </div>
 
@@ -1102,17 +1248,27 @@ root.innerHTML = `
 
   <div class="grid">
 
+
     <button
       class="primary"
-      id="jpf-run">
+      id="jpc-current">
 
-      属性フィルタを解析
+      現在の属性を取得
 
     </button>
 
 
     <button
-      id="jpf-export">
+      class="primary"
+      id="jpc-all">
+
+      全属性を連続取得
+
+    </button>
+
+
+    <button
+      id="jpc-export">
 
       JSONを書き出す
 
@@ -1120,16 +1276,24 @@ root.innerHTML = `
 
 
     <button
-      class="danger"
-      id="jpf-reset">
+      id="jpc-refresh">
 
-      結果を削除
+      状態を再読込
 
     </button>
 
 
     <button
-      id="jpf-close2">
+      class="danger"
+      id="jpc-reset">
+
+      属性進捗をリセット
+
+    </button>
+
+
+    <button
+      id="jpc-close2">
 
       閉じる
 
@@ -1144,9 +1308,10 @@ root.innerHTML = `
       実行ログ
     </div>
 
+
     <div
       class="log"
-      id="jpf-log">
+      id="jpc-log">
 
       準備完了
 
@@ -1178,46 +1343,141 @@ function log(message) {
       .toLocaleTimeString();
 
 
-  $("#jpf-log")
+  $("#jpc-log")
     .textContent =
     "[" +
     time +
     "] " +
     message +
     "\n" +
-    $("#jpf-log")
+    $("#jpc-log")
       .textContent;
 }
 
 
-function render() {
+/* =========================================================
+   表示
+   ========================================================= */
 
-  const saved =
-    loadResult();
+async function render() {
+
+  const state =
+    loadState();
 
 
-  $("#jpf-run")
-    .disabled =
-    busy;
+  $("#jpc-count")
+    .textContent =
+    state.cards.length;
 
 
-  $("#jpf-export")
+  let status;
+
+
+  if (
+    state.finished
+  ) {
+
+    status =
+      state.errors.length
+        ? "全属性取得済み / エラーあり"
+        : "全属性取得完了";
+
+  } else {
+
+    const property =
+      PROPERTIES[
+        state.current_property_index
+      ];
+
+
+    status =
+      property
+        ? (
+          "次：" +
+          property.name +
+          "属性 / " +
+          (
+            state.current_page +
+            1
+          ) +
+          "ページ目"
+        )
+        : "完了";
+  }
+
+
+  $("#jpc-status")
+    .textContent =
+    status;
+
+
+  const summaryLines =
+    PROPERTIES.map(p => {
+
+      const s =
+        state.property_summary[
+          p.name
+        ];
+
+
+      if (!s) {
+
+        return (
+          p.name +
+          "：未取得"
+        );
+      }
+
+
+      return (
+        p.name +
+        "：" +
+        s.card_count +
+        "件 / " +
+        s.collected_pages +
+        "/" +
+        s.total_pages +
+        "ページ"
+      );
+    });
+
+
+  $("#jpc-summary")
+    .innerHTML =
+    summaryLines.join(
+      "<br>"
+    );
+
+
+  $("#jpc-current")
     .disabled =
     busy ||
-    !saved;
+    state.finished;
 
 
-  $("#jpf-reset")
+  $("#jpc-all")
+    .disabled =
+    busy ||
+    state.finished;
+
+
+  $("#jpc-export")
+    .disabled =
+    busy ||
+    state.cards.length === 0;
+
+
+  $("#jpc-reset")
     .disabled =
     busy;
 }
 
 
-/* ========================================
-   解析ボタン
-   ======================================== */
+/* =========================================================
+   ボタン
+   ========================================================= */
 
-$("#jpf-run")
+$("#jpc-current")
 .onclick =
 async () => {
 
@@ -1228,73 +1488,73 @@ async () => {
 
   busy = true;
 
-  render();
+  await render();
 
 
   try {
 
+    await collectCurrentProperty(
+      log,
+      render
+    );
+
+  } catch(e) {
+
     log(
-      "Album一覧を解析中…"
+      "ERROR: " +
+      (
+        e?.message ||
+        String(e)
+      )
+    );
+
+  } finally {
+
+    busy = false;
+
+    await render();
+  }
+};
+
+
+$("#jpc-all")
+.onclick =
+async () => {
+
+  if (busy) {
+    return;
+  }
+
+
+  if (
+    !confirm(
+      "戦・魔・飛・獣・船を連続取得します。\n\nSafariをこの画面のままにしてください。\n\n続行しますか？"
+    )
+  ) {
+
+    return;
+  }
+
+
+  busy = true;
+
+  await render();
+
+
+  try {
+
+    await collectAll(
+      log,
+      render
     );
 
 
-    const result =
-      await runInspection();
-
-
     log(
-      "propertyリンク：" +
-      result.links.length +
-      "件"
+      "全属性の収集が終了しました"
     );
 
 
-    log(
-      "select：" +
-      result.selects.length +
-      "件"
-    );
-
-
-    log(
-      "input：" +
-      result.inputs.length +
-      "件"
-    );
-
-
-    log(
-      "属性文字候補：" +
-      result.attribute_text_elements.length +
-      "件"
-    );
-
-
-    const summary =
-      result.property_value_tests
-        .map(x =>
-          "property=" +
-          x.property_value +
-          " → " +
-          (
-            x.error
-              ? "ERROR"
-              : x.card_count_page1 +
-                "件"
-          )
-        )
-        .join("\n");
-
-
-    log(summary);
-
-
-    log(
-      "解析完了。JSONを書き出してください。"
-    );
-
-
-  } catch (e) {
+  } catch(e) {
 
     log(
       "ERROR: " +
@@ -1309,35 +1569,21 @@ async () => {
 
     busy = false;
 
-    render();
+    await render();
   }
 };
 
 
-/* ========================================
-   export
-   ======================================== */
-
-$("#jpf-export")
+$("#jpc-export")
 .onclick =
 () => {
 
-  const saved =
-    loadResult();
-
-
-  if (!saved) {
-
-    log(
-      "解析結果がありません"
-    );
-
-    return;
-  }
+  const state =
+    loadState();
 
 
   exportJson(
-    saved
+    state
   );
 
 
@@ -1347,19 +1593,36 @@ $("#jpf-export")
 };
 
 
-/* ========================================
-   reset
-   ======================================== */
-
-$("#jpf-reset")
+$("#jpc-refresh")
 .onclick =
-() => {
+async () => {
+
+  await render();
+
+
+  const state =
+    loadState();
+
+
+  log(
+    "保存済み：" +
+    state.cards.length +
+    "件 / エラー=" +
+    state.errors.length
+  );
+};
+
+
+$("#jpc-reset")
+.onclick =
+async () => {
 
   if (
     !confirm(
-      "属性フィルタ検証結果を削除しますか？"
+      "属性収集の進捗をすべて削除しますか？\n\nカード詳細1,359件のデータには影響しません。"
     )
   ) {
+
     return;
   }
 
@@ -1369,28 +1632,42 @@ $("#jpf-reset")
   );
 
 
-  render();
+  await render();
 
 
   log(
-    "結果を削除しました"
+    "属性収集をリセットしました"
   );
 };
 
 
-$("#jpf-close")
+$("#jpc-close")
 .onclick =
 () =>
   root.remove();
 
 
-$("#jpf-close2")
+$("#jpc-close2")
 .onclick =
 () =>
   root.remove();
 
 
-render();
+/* =========================================================
+   初期表示
+   ========================================================= */
+
+await render();
+
+
+const initial =
+  loadState();
+
+
+log(
+  "保存済み属性カード=" +
+  initial.cards.length
+);
 
 
 if (
@@ -1400,12 +1677,19 @@ if (
 
   completion(
     JSON.stringify({
+
       ok: true,
+
       panel: true,
+
       version:
         VERSION,
-      saved:
-        !!loadResult()
+
+      card_count:
+        initial.cards.length,
+
+      finished:
+        initial.finished
     })
   );
 }
