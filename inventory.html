@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>JOLLY 育成管理</title>
+<style>
+:root{
+  --bg:#f3f8f8; --card:#fff; --text:#152033; --sub:#6d7580;
+  --line:#dfe6e7; --blue:#2f6fe8; --green:#1ea65b; --greenbg:#e9f8ef;
+  --shadow:0 2px 10px rgba(21,32,51,.10);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue","Hiragino Sans","Yu Gothic",sans-serif}
+.wrap{max-width:760px;margin:0 auto;padding:14px 14px 90px}
+.top{position:sticky;top:0;z-index:5;background:rgba(243,248,248,.94);backdrop-filter:blur(12px);padding:8px 0 10px}
+h1{font-size:23px;margin:0 0 10px}
+.controls{display:flex;gap:8px;flex-wrap:wrap}
+button,.fileLabel,select,input{font:inherit}
+button,.fileLabel,select{border:1px solid #ccd7da;background:#fff;border-radius:12px;padding:10px 12px;color:var(--text)}
+.fileLabel{cursor:pointer}
+.fileLabel input{display:none}
+.meta{font-size:14px;color:var(--sub);margin:10px 4px 0}
+.notice{font-size:13px;color:#58616c;margin:8px 4px 0}
+.card{background:var(--card);border:1px solid #d9e1e2;border-radius:20px;margin:14px 0;box-shadow:var(--shadow);overflow:hidden}
+.main{display:grid;grid-template-columns:150px 1fr;gap:14px;padding:18px}
+.imgbox img{width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:15px;background:#edf1f2}
+.title{font-size:23px;font-weight:800;line-height:1.25;margin-bottom:5px}
+.sub{font-size:16px;color:var(--sub);margin-bottom:10px}
+.badge{display:inline-block;font-size:15px;font-weight:700;padding:5px 10px;border-radius:8px;background:var(--greenbg);color:var(--green);margin-bottom:14px}
+.awkrow{display:flex;justify-content:space-between;gap:10px;font-weight:800;font-size:17px}
+.bar{height:14px;background:#e6eaed;border-radius:999px;overflow:hidden;margin:7px 0 15px}
+.bar>div{height:100%;background:var(--blue);border-radius:999px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.stat{background:#fafafa;border-radius:15px;text-align:center;padding:10px 5px}
+.stat .k{font-size:14px;color:#858b92}
+.stat .v{font-size:25px;font-weight:800;margin-top:2px}
+.detailBtn{width:100%;border:0;border-top:1px solid var(--line);border-radius:0;background:#fff;font-weight:800;font-size:20px;padding:15px}
+.details{display:none;border-top:1px solid var(--line);padding:16px 18px 18px;background:#fbfdfd}
+.card.open .details{display:block}
+.card.open .detailBtn{background:#f7fafb}
+.rel{padding:10px 12px;background:#eef5ff;border-radius:12px;margin-bottom:12px;line-height:1.5}
+.breakdown{display:grid;grid-template-columns:1fr auto;gap:0;border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.breakdown div{padding:10px 12px;border-bottom:1px solid var(--line)}
+.breakdown div:nth-last-child(-n+2){border-bottom:0}
+.breakdown .n{text-align:right;font-weight:800}
+.breakdown .total{font-weight:800;background:#f5f8fa}
+.small{font-size:13px;color:var(--sub);margin-top:10px;line-height:1.5}
+.back{position:fixed;right:18px;bottom:24px;width:56px;height:56px;border:0;border-radius:50%;background:#101a2b;color:#fff;font-size:28px;box-shadow:0 4px 16px rgba(0,0,0,.22)}
+.empty{padding:40px 10px;text-align:center;color:var(--sub)}
+@media(max-width:560px){
+  .wrap{padding:8px 10px 85px}
+  .main{grid-template-columns:145px 1fr;gap:12px;padding:14px}
+  .title{font-size:21px}
+  .sub{font-size:15px}
+  .stat .v{font-size:23px}
+}
+@media(max-width:390px){
+  .main{grid-template-columns:126px 1fr}
+  .title{font-size:19px}
+  .stats{gap:5px}
+  .stat .v{font-size:21px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>JOLLY 育成管理</h1>
+    <div class="controls">
+      <label class="fileLabel">JSONを手動選択<input id="file" type="file" accept=".json,application/json"></label>
+      <select id="filter">
+        <option value="material">育成素材あり</option>
+        <option value="training">育成中</option>
+        <option value="all">全所有カード</option>
+        <option value="reinc">転生後カード</option>
+      </select>
+    </div>
+    <div id="meta" class="meta">user_inventory.json を読み込み中…</div>
+    <div id="notice" class="notice"></div>
+  </div>
+  <div id="list"></div>
+</div>
+<button class="back" onclick="scrollTo({top:0,behavior:'smooth'})">↑</button>
+
+<script>
+const DB='user_inventory.json';
+const $=id=>document.getElementById(id);
+const esc=s=>(s??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let data=null;
+
+function material(c,k){return Number(c?.usable_materials_if_all_spent_here?.[k]||0)}
+function remaining(c){return Math.max(0,Number(c.remaining_awakenings ?? c.remaining_awakenings_site ?? 0))}
+function usableTotal(c){return Math.max(0,Number(c?.usable_materials_if_all_spent_here?.total||0))}
+function possible(c){return Math.min(remaining(c),usableTotal(c))}
+function awakeningMax(c){return Number(c.awakening_max ?? c.awakening_max_site ?? 0)}
+function awakeningNow(c){return Number(c.awakening_count||0)}
+function pct(c){
+  const m=awakeningMax(c); if(!m)return 0;
+  return Math.max(0,Math.min(100,awakeningNow(c)/m*100))
+}
+
+function isMaterialTarget(c){
+  return Number(c.same_card_material_copies||0)>0 || Number(c.pre_reincarnation_material_copies||0)>0;
+}
+function filterCards(cards){
+  const f=$('filter').value;
+  if(f==='material') return cards.filter(isMaterialTarget);
+  if(f==='training') return cards.filter(c=>c.training);
+  if(f==='reinc') return cards.filter(c=>c.is_reincarnated);
+  return cards;
+}
+function sortCards(cards){
+  return [...cards].sort((a,b)=>
+    Number(b.training)-Number(a.training) ||
+    possible(b)-possible(a) ||
+    Number(b.same_card_material_copies||0)-Number(a.same_card_material_copies||0) ||
+    Number(a.card_no)-Number(b.card_no)
+  );
+}
+
+function detailRows(c){
+  const rows=[
+    ['同名カード', material(c,'same_card')],
+  ];
+  if(c.is_reincarnated || material(c,'pre_reincarnation_card')>0){
+    rows.push([`転生前カード${c.reincarnation_source_card_name?'（'+esc(c.reincarnation_source_card_name)+'）':''}`, material(c,'pre_reincarnation_card')]);
+  }
+  rows.push(
+    ['とくぱん系（全レア対応）', material(c,'universal_tokupan')],
+    [`同レアとくぱん（★${Number(c.rarity_stars||0)}）`, material(c,'same_rarity_tokupan')]
+  );
+  if(c.is_reincarnated){
+    rows.push(
+      ['転生らいおん', material(c,'reincarnation_lion')],
+      ['キング転生らいおん', material(c,'king_reincarnation_lion')]
+    );
+  }
+  return rows;
+}
+
+function cardHTML(c){
+  const max=awakeningMax(c), now=awakeningNow(c), rem=remaining(c);
+  const owned=Number(c.owned_count||0);
+  const same=Number(c.same_card_material_copies||0);
+  const pre=Number(c.pre_reincarnation_material_copies||0);
+  const total=usableTotal(c), can=possible(c);
+  const rel=c.is_reincarnated
+    ? `<div class="rel"><b>転生後カード</b><br>転生前：${esc(c.reincarnation_source_card_name||'不明')}（No.${esc(c.reincarnation_source_card_no||'-')}）<br>所有している転生前カード ${pre} 枚も覚醒素材として使用可能</div>`
+    : '';
+  const rows=detailRows(c).map(([k,v])=>`<div>${k}</div><div class="n">${v}</div>`).join('');
+  const badge=c.training?'育成中':(c.is_reincarnated?'転生後':'未育成');
+  return `
+  <div class="card">
+    <div class="main">
+      <div class="imgbox"><img loading="lazy" src="${esc(c.image_url||'')}" alt=""></div>
+      <div>
+        <div class="title">${esc(c.card_name)}</div>
+        <div class="sub">No.${esc(c.card_no)} ・ ${esc(c.property||'?')} ・ ${esc(c.rarity_name||'')} ・ ★${esc(c.rarity_stars||'')}</div>
+        <span class="badge">${badge}</span>
+        <div class="awkrow"><span>覚醒 ${now}/${max}</span><span>残り ${rem}</span></div>
+        <div class="bar"><div style="width:${pct(c)}%"></div></div>
+        <div class="stats">
+          <div class="stat"><div class="k">所有</div><div class="v">${owned}</div></div>
+          <div class="stat"><div class="k">同名素材</div><div class="v">${same}</div></div>
+          <div class="stat"><div class="k">投入可能</div><div class="v">${can}</div></div>
+        </div>
+      </div>
+    </div>
+    <button class="detailBtn" onclick="this.closest('.card').classList.toggle('open');this.textContent=this.closest('.card').classList.contains('open')?'閉じる':'詳細'">詳細</button>
+    <div class="details">
+      ${rel}
+      <div class="breakdown">
+        ${rows}
+        <div class="total">使用可能素材 合計</div><div class="n total">${total}</div>
+        <div class="total">現在の残り覚醒に投入可能</div><div class="n total">${can}</div>
+      </div>
+      <div class="small">「投入可能」は、使用可能素材の合計と残り覚醒回数の小さい方です。転生らいおん／キング転生らいおんは転生後カードでのみ計上します。</div>
+    </div>
+  </div>`;
+}
+
+function render(){
+  if(!data)return;
+  const all=(data.cards||[]);
+  const rows=sortCards(filterCards(all));
+  $('meta').textContent=`${rows.length}種類を表示`;
+  const preCount=all.filter(c=>Number(c.pre_reincarnation_material_copies||0)>0).length;
+  $('notice').textContent=$('filter').value==='material' && preCount
+    ? `同名素材に加え、転生前カードを素材にできる転生後カードも対象（該当 ${preCount}種類）`
+    : '';
+  $('list').innerHTML=rows.map(cardHTML).join('')||'<div class="empty">該当カードはありません</div>';
+}
+function setData(x){
+  if(!x || !Array.isArray(x.cards)) throw new Error('cards 配列がありません');
+  data=x; render();
+}
+$('filter').addEventListener('change',render);
+$('file').addEventListener('change',async e=>{
+  const f=e.target.files?.[0]; if(!f)return;
+  try{setData(JSON.parse(await f.text()));}
+  catch(err){$('meta').textContent='読み込みエラー: '+err.message}
+});
+fetch(DB,{cache:'no-store'})
+  .then(r=>{if(!r.ok)throw new Error(String(r.status));return r.json()})
+  .then(setData)
+  .catch(()=>{$('meta').textContent='user_inventory.json を自動読込できません。上の「JSONを手動選択」から選んでください。'});
+</script>
+</body>
+</html>
