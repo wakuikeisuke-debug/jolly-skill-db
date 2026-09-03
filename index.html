@@ -154,6 +154,36 @@ const esc=s=>(s??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','
 let data={cards:[],skills:[],supplemental_skills:[],statuses:[]},mode='skills',affinityMode='card';
 let selectedAffinitySkillNames=[];
 
+/*
+  タブごとの表示位置を記憶する。
+  スキル→カード→スキルのように戻った時、
+  直前に見ていた位置へ復帰する。
+*/
+const scrollByMode={
+  skills:0,
+  cards:0,
+  affinity:0,
+  statuses:0
+};
+
+function restoreModeScroll(m){
+  const y=Number(scrollByMode[m]||0);
+
+  /*
+    render()でDOMを入れ替えた次の描画タイミングで
+    スクロール位置を復元する。
+  */
+  requestAnimationFrame(()=>{
+    requestAnimationFrame(()=>{
+      window.scrollTo({
+        top:y,
+        left:0,
+        behavior:'auto'
+      });
+    });
+  });
+}
+
 const sname=s=>s?.スキル名||s?.skill_name||s?.original_skill_name||'';
 const seffect=s=>s?.効果||s?.effect||s?.card_effect_raw||'';
 const sgenre=s=>s?.ジャンル||s?.genre||'';
@@ -243,12 +273,32 @@ function jumpSkillName(name){setMode('skills');$('sq').value=name;render();scrol
 function dirTag(d){return d==='positive_for_user'?'<span class="tag owned">使用側に有利</span>':d==='negative_for_user'?'<span class="tag neg">使用側に不利</span>':'<span class="tag">中立・未分類</span>'}
 
 function setMode(m){
-  mode=m;
-  for(const x of ['Skills','Cards','Affinity','Statuses']){
-    $('t'+x).classList.toggle('active',m===x.toLowerCase());
-    $('c'+x).classList.toggle('hidden',m!==x.toLowerCase());
+  /*
+    今いるタブの位置を保存。
+    同じタブを押した場合は位置を動かさない。
+  */
+  if(m===mode){
+    return;
   }
+
+  scrollByMode[mode]=window.scrollY;
+
+  mode=m;
+
+  for(const x of ['Skills','Cards','Affinity','Statuses']){
+    $('t'+x).classList.toggle(
+      'active',
+      m===x.toLowerCase()
+    );
+
+    $('c'+x).classList.toggle(
+      'hidden',
+      m!==x.toLowerCase()
+    );
+  }
+
   render();
+  restoreModeScroll(m);
 }
 function build(){
   const gs=[...new Set(searchableSkills().map(sgenre).filter(Boolean))].sort();
@@ -338,11 +388,88 @@ function skillBlock(s,prefix='',special=false){
   const evo=special?` <span class="tag evo">${s.evolution_type==='divine'?'神格':'魔格'}特殊</span>`:'';
   return `<div style="padding:8px 0;border-bottom:1px solid #eee"><b>${esc(prefix)}${esc(sname(s))}</b>${evo}${s.required_item_name?` <span class="tag unlock">必要: ${esc(s.required_item_name)}</span>`:''}<div class="tags">${sts}${imm}</div><div class="small">${esc(seffect(s))}</div></div>`;
 }
+function skillChangeBlock(x){
+  const from=x.from_skill||{};
+  const to=x.to_skill||{};
+
+  const fromName=sname(from);
+  const toName=sname(to);
+  const toEffect=seffect(to);
+
+  const sts=to
+    ? inflictedStatuses(to)
+        .map(statusButton)
+        .join('')
+    : '';
+
+  return `
+    <div style="
+      padding:10px 0;
+      border-bottom:1px solid #eee
+    ">
+
+      <div>
+        <b>
+          🔄 ${esc(fromName)}
+          → ${esc(toName)}
+        </b>
+
+        ${
+          x.required_item_name
+          ? `
+            <span class="tag unlock">
+              必要: ${esc(x.required_item_name)}
+            </span>
+          `
+          : ''
+        }
+      </div>
+
+      ${
+        sts
+        ? `<div class="tags">${sts}</div>`
+        : ''
+      }
+
+      <div class="small"
+           style="
+             margin-top:7px;
+             line-height:1.55;
+             white-space:pre-wrap
+           ">
+        <b>変化後スキル効果</b><br>
+        ${
+          toEffect
+          ? esc(toEffect)
+          : '<span style="color:#9ca3af">説明文なし</span>'
+        }
+      </div>
+
+    </div>
+  `;
+}
+
 function cardCard(c){
   const base=(c.skills||[]).map(s=>skillBlock(s)).join('');
-  const un=(c.unlock_skills||[]).map(s=>skillBlock(s,'🔓 ')).join('');
-  const sp=(c.special_skills||[]).map(s=>skillBlock(s,'✨ ',true)).join('');
-  const ch=(c.skill_changes||[]).map(x=>`<div style="padding:8px 0;border-bottom:1px solid #eee"><b>🔄 ${esc(sname(x.from_skill||{}))} → ${esc(sname(x.to_skill||{}))}</b> <span class="tag unlock">${esc(x.required_item_name||'')}</span>${x.to_skill?`<div class="tags">${inflictedStatuses(x.to_skill).map(statusButton).join('')}</div>`:''}</div>`).join('');
+
+  /*
+    アイテム解放はskillBlockを使うため、
+    解放後スキルの効果説明も表示する。
+  */
+  const un=(c.unlock_skills||[])
+    .map(s=>skillBlock(s,'🔓 '))
+    .join('');
+
+  const sp=(c.special_skills||[])
+    .map(s=>skillBlock(s,'✨ ',true))
+    .join('');
+
+  /*
+    アイテム変化は「変化後」の効果説明を表示。
+  */
+  const ch=(c.skill_changes||[])
+    .map(skillChangeBlock)
+    .join('');
   return `<div class="card">
     <div class="cardTop">
       ${imageHtml(c)}
@@ -355,8 +482,8 @@ function cardCard(c){
       ${c.description?`<details class="fold"><summary>カード説明</summary><div class="foldBody effect">${esc(c.description)}</div></details>`:''}
       <details class="fold" open><summary>通常スキル ${(c.skills||[]).length}件</summary><div class="foldBody">${base||'<div class="small">なし</div>'}</div></details>
       ${sp?`<details class="fold" open><summary>${c.evolution_type==='divine'?'神格':'魔格'}特殊スキル ${(c.special_skills||[]).length}件</summary><div class="foldBody">${sp}</div></details>`:''}
-      ${un?`<details class="fold"><summary>アイテム解放 ${(c.unlock_skills||[]).length}件</summary><div class="foldBody">${un}</div></details>`:''}
-      ${ch?`<details class="fold"><summary>アイテム変化 ${(c.skill_changes||[]).length}件</summary><div class="foldBody">${ch}</div></details>`:''}
+      ${un?`<details class="fold"><summary>アイテム解放 ${(c.unlock_skills||[]).length}件</summary><div class="foldBody"><div class="small" style="margin:2px 0 6px">アイテム使用で解放されるスキルと、その効果です。</div>${un}</div></details>`:''}
+      ${ch?`<details class="fold"><summary>アイテム変化 ${(c.skill_changes||[]).length}件</summary><div class="foldBody"><div class="small" style="margin:2px 0 6px">アイテム使用後のスキルと、変化後の効果です。</div>${ch}</div></details>`:''}
     </div>
   </div>`;
 }
