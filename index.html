@@ -132,7 +132,7 @@ input,select{font:inherit;width:100%;border:1px solid #d1d5db;background:#fff;bo
   <div id="cStatuses" class="hidden"><input id="stq" type="search" placeholder="異常状態名・説明を検索"></div>
 </div>
 
-<div class="meta" id="meta">jolly_card_db_v5.json を読み込み中…</div>
+<div class="meta" id="meta">jolly_card_db_latest.json を読み込み中…</div>
 <div id="results"></div>
 </div>
 
@@ -147,7 +147,7 @@ input,select{font:inherit;width:100%;border:1px solid #d1d5db;background:#fff;bo
 <button class="back" id="back">↑</button>
 
 <script>
-const DB='jolly_card_db_v5.json';
+const DB='jolly_card_db_latest.json';
 const $=id=>document.getElementById(id);
 const norm=s=>(s??'').toString().normalize('NFKC').toLowerCase();
 const esc=s=>(s??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -652,7 +652,7 @@ $('smClose').onclick=closeStatus;$('statusModal').onclick=e=>{if(e.target===$('s
 fetch(DB+'?t='+Date.now(),{cache:'no-store'})
 .then(r=>{if(!r.ok)throw Error('HTTP '+r.status);return r.json()})
 .then(o=>{data=o;build();render()})
-.catch(e=>{$('meta').textContent='読込失敗: '+e.message+'。index.htmlと同じ場所に jolly_card_db_v5.json を置いてください。'});
+.catch(e=>{$('meta').textContent='読込失敗: '+e.message+'。index.htmlと同じ場所に jolly_card_db_latest.json を置いてください。'});
 </script>
 </body>
 </html>
