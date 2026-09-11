@@ -1,0 +1,89 @@
+(() => {
+'use strict';
+const CARDS = [["1573", "紅闇の針エクテレシィ"], ["1574", "月夜のスナイパー・ショコラ"], ["1575", "糖月のスナイパー・ショコラ"], ["1576", "霊冥の聖女ユスフェミア"], ["1577", "亡竜乗りのシズク"], ["1578", "夜咆竜乗りのシズク"]];
+const SKILLS = [["10731", "フェアリーライト"], ["8066", "キャプテングローリー"], ["7301", "魔科医の往診"], ["7304", "クイックドロウ"], ["4398", "闇の鉄鎖"], ["4245", "セメタリーパーク"], ["4246", "瞬硬の秘法"]];
+const OUT = 'jolly_update_missing_evidence.json';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const clean = s => String(s||'').replace(/\s+/g,' ').trim();
+const abs = u => { try { return new URL(u, location.href).href; } catch(_) { return ''; } };
+
+function extractImages(doc){
+  return [...doc.images].map(x => ({
+    src: abs(x.getAttribute('src')||''),
+    alt: clean(x.getAttribute('alt')||''),
+    title: clean(x.getAttribute('title')||''),
+    cls: clean(x.className||'')
+  })).filter(x => x.src);
+}
+function relevantHtml(doc, needles){
+  const out=[];
+  for(const el of doc.querySelectorAll('div,span,td,th,a,p,li')){
+    const t=clean(el.textContent);
+    if(!t || !needles.some(n=>t.includes(n))) continue;
+    out.push({tag:el.tagName, text:t.slice(0,1000), html:el.outerHTML.slice(0,5000)});
+    if(out.length>=30) break;
+  }
+  return out;
+}
+async function get(url){
+  const r=await fetch(url,{credentials:'include',cache:'no-store'});
+  const text=await r.text();
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  const doc=new DOMParser().parseFromString(text,'text/html');
+  return {url:r.url,doc,text};
+}
+let LAST=null;
+function panel(obj){
+  LAST=obj;
+  document.getElementById('jolly_missing_evidence_panel')?.remove();
+  const d=document.createElement('div');
+  d.id='jolly_missing_evidence_panel';
+  d.style.cssText='position:fixed;left:10px;right:10px;bottom:10px;z-index:2147483647;background:#111827;color:white;padding:12px;border-radius:14px;font:13px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 30px #0008';
+  d.innerHTML=`<b>不足証拠の取得完了</b><div style="margin:8px 0">カード ${obj.cards.length}/6・スキル ${obj.skills.length}/7・エラー ${obj.errors.length}</div><button id="jeSave" style="padding:10px;border:0;border-radius:9px;font-weight:700;width:100%">JSON保存</button>`;
+  document.body.appendChild(d);
+  document.getElementById('jeSave').onclick=async()=>{
+    const txt=JSON.stringify(LAST,null,2);
+    const f=new File([txt],OUT,{type:'application/json'});
+    if(navigator.canShare && navigator.canShare({files:[f]})) await navigator.share({files:[f]});
+    else { await navigator.clipboard.writeText(txt); alert('共有不可のためJSONをコピーしました'); }
+  };
+}
+async function run(){
+  if(!confirm('DB更新に不足している証拠だけ取得します。\nカード属性6件＋スキルジャンル7件')) return;
+  const out={meta:{version:'jolly-missing-evidence-1.0',collected_at:new Date().toISOString()},cards:[],skills:[],errors:[]};
+
+  for(const [id,name] of CARDS){
+    try{
+      const u=`${location.origin}/?M=Card&A=AlbumDetail&card=${encodeURIComponent(id)}`;
+      const {url,doc}=await get(u);
+      out.cards.push({
+        card_no:id, card_name:name, final_url:url,
+        body_text:clean(doc.body?.innerText||''),
+        images:extractImages(doc),
+        relevant_html:relevantHtml(doc,[name,'属性','戦','魔','飛','獣'])
+      });
+    }catch(e){out.errors.push({type:'card',id,name,error:String(e)});}
+    await sleep(500);
+  }
+
+  for(const [id,name] of SKILLS){
+    try{
+      const u=`${location.origin}/?M=Card&A=Album&skill_no=${encodeURIComponent(id)}`;
+      const {url,doc}=await get(u);
+      out.skills.push({
+        skill_id:id, skill_name:name, final_url:url,
+        body_text:clean(doc.body?.innerText||''),
+        images:extractImages(doc),
+        relevant_html:relevantHtml(doc,[name,'攻撃系','回復','支援','援護','防御','潜在','ステータス','仲間','デッキ'])
+      });
+    }catch(e){out.errors.push({type:'skill',id,name,error:String(e)});}
+    await sleep(500);
+  }
+  out.meta.card_count=out.cards.length;
+  out.meta.skill_count=out.skills.length;
+  out.meta.error_count=out.errors.length;
+  panel(out);
+  alert(`取得完了：カード ${out.cards.length}/6、スキル ${out.skills.length}/7、エラー ${out.errors.length}\n画面下のJSON保存をタップしてください。`);
+}
+run().catch(e=>alert('停止: '+(e?.message||e)));
+})();
