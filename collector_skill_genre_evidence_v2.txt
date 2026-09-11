@@ -1,0 +1,109 @@
+(() => {
+'use strict';
+const TARGETS=[["10731", "フェアリーライト"], ["8066", "キャプテングローリー"], ["7301", "魔科医の往診"], ["7304", "クイックドロウ"], ["4398", "闇の鉄鎖"], ["4245", "セメタリーパーク"], ["4246", "瞬硬の秘法"]];
+const GENRES=[[1, "攻撃系スキル"], [2, "回復・支援系"], [3, "デッキ制御系"], [4, "援護系"], [5, "潜在能力系"], [6, "攻撃補助系"], [7, "仲間系"], [100, "防御系"], [13, "ステータスUP系"], [8, "対レイドモンスター系"]];
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const clean=s=>String(s||'').replace(/\s+/g,' ').trim();
+const targetMap=new Map(TARGETS.map(x=>[String(x[0]),x[1]]));
+
+async function fetchDoc(url){
+  const r=await fetch(url,{credentials:'include',cache:'no-store'});
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return new DOMParser().parseFromString(await r.text(),'text/html');
+}
+function scanSkills(doc){
+  const hits=[];
+  for(const a of doc.querySelectorAll('a[href*="skill_no="]')){
+    try{
+      const u=new URL(a.href,location.href);
+      const id=u.searchParams.get('skill_no');
+      if(id && targetMap.has(id)){
+        hits.push({skill_id:id,skill_name:targetMap.get(id),href:u.href,text:clean(a.textContent)});
+      }
+    }catch(_){}
+  }
+  return hits;
+}
+function nextPage(doc,currentSkillType){
+  let best=null;
+  for(const a of doc.querySelectorAll('a[href*="M=Help"][href*="A=SkillSearch"]')){
+    const t=clean(a.textContent);
+    if(!/NEXT|次/.test(t)) continue;
+    try{
+      const u=new URL(a.href,location.href);
+      if(String(u.searchParams.get('SkillType')||'')===String(currentSkillType)) return u.href;
+      // some NEXT links preserve category implicitly/oddly; only accept if no conflicting SkillType
+      if(!u.searchParams.get('SkillType')) best=u.href;
+    }catch(_){}
+  }
+  return best;
+}
+let LAST=null;
+function show(out){
+  LAST=out;
+  document.getElementById('jolly-genre-evidence')?.remove();
+  const d=document.createElement('div');
+  d.id='jolly-genre-evidence';
+  d.style.cssText='position:fixed;left:10px;right:10px;bottom:10px;z-index:2147483647;background:#111827;color:#fff;padding:12px;border-radius:14px;font:13px -apple-system,sans-serif;box-shadow:0 8px 30px #0008';
+  d.innerHTML=`<b>スキルジャンル照合完了</b><div style="margin:7px 0">確定 ${out.meta.resolved_count}/7 ・ エラー ${out.errors.length} ・ 訪問 ${out.meta.visited_pages}ページ</div><button id="jrSave" style="width:100%;padding:10px;border:0;border-radius:9px;font-weight:700">JSON保存</button>`;
+  document.body.appendChild(d);
+  document.getElementById('jrSave').onclick=async()=>{
+    const txt=JSON.stringify(LAST,null,2);
+    const f=new File([txt],'jolly_skill_genre_evidence_v2.json',{type:'application/json'});
+    if(navigator.canShare&&navigator.canShare({files:[f]})) await navigator.share({files:[f]});
+    else {await navigator.clipboard.writeText(txt); alert('JSONをコピーしました');}
+  };
+}
+async function run(){
+  if(!confirm('SkillTypeカテゴリを検索語なしで走査し、7スキルの所属ジャンルを確定します。')) return;
+  const out={meta:{version:'jolly-skill-genre-evidence-2.0',collected_at:new Date().toISOString(),method:'unsearched-SkillType-membership'},skills:{},categories:[],errors:[]};
+  for(const [id,name] of TARGETS) out.skills[String(id)]={skill_id:String(id),skill_name:name,matches:[]};
+  let visited=0;
+
+  for(const [gid,gname] of GENRES){
+    let url=`${location.origin}/?M=Help&A=SkillSearch&SkillType=${gid}`;
+    const seen=new Set();
+    let pages=0, found=[];
+    while(url && !seen.has(url) && pages<120){
+      seen.add(url); pages++; visited++;
+      try{
+        const doc=await fetchDoc(url);
+        for(const h of scanSkills(doc)){
+          if(!out.skills[h.skill_id].matches.some(x=>x.skill_type===gid)){
+            out.skills[h.skill_id].matches.push({skill_type:gid,genre:gname,source_url:url});
+            found.push(h.skill_id);
+          }
+        }
+        let n=nextPage(doc,gid);
+        if(n){
+          const u=new URL(n,location.href);
+          // force category to remain explicit, and remove search to avoid the proven bug
+          u.searchParams.set('M','Help');
+          u.searchParams.set('A','SkillSearch');
+          u.searchParams.set('SkillType',gid);
+          u.searchParams.delete('search');
+          url=u.href;
+        }else url=null;
+      }catch(e){
+        out.errors.push({skill_type:gid,genre:gname,url,error:String(e)});
+        url=null;
+      }
+      await sleep(500);
+    }
+    out.categories.push({skill_type:gid,genre:gname,pages_visited:pages,found_target_ids:[...new Set(found)]});
+  }
+
+  const arr=Object.values(out.skills);
+  for(const s of arr){
+    s.resolved=s.matches.length===1;
+    s.resolution=s.resolved?s.matches[0]:null;
+  }
+  out.skills=arr;
+  out.meta.resolved_count=arr.filter(x=>x.resolved).length;
+  out.meta.visited_pages=visited;
+  out.meta.error_count=out.errors.length;
+  show(out);
+  alert(`完了：ジャンル確定 ${out.meta.resolved_count}/7、エラー ${out.errors.length}\nJSON保存をタップしてください。`);
+}
+run().catch(e=>alert('停止: '+(e?.message||e)));
+})();
