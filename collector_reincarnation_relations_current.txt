@@ -1,0 +1,171 @@
+(() => {
+'use strict';
+
+const OUT='jolly_reincarnation_relations_current_raw.json';
+const START=`${location.origin}/?M=LimitBreak&A=List&sort=13&property=0`;
+const DELAY=500;
+const MAX_PAGES=120;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const clean=s=>String(s||'').replace(/\s+/g,' ').trim();
+
+async function getDoc(url){
+  const r=await fetch(url,{credentials:'include',cache:'no-store'});
+  const text=await r.text();
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return {url:r.url,doc:new DOMParser().parseFromString(text,'text/html')};
+}
+
+function cardNoFromHref(href){
+  try{
+    const u=new URL(href,location.href);
+    return u.searchParams.get('card') || u.searchParams.get('card_no') || null;
+  }catch(_){ return null; }
+}
+
+function extractPage(doc,page,url){
+  const rows=[];
+  const blocks=[...doc.querySelectorAll('tr, .ui-bar-c, .ui-body-c, li, .list, .card')];
+
+  for(const block of blocks){
+    const text=clean(block.innerText);
+    if(!text) continue;
+    const links=[...block.querySelectorAll('a[href]')]
+      .map(a=>({href:a.href,text:clean(a.textContent),card_no:cardNoFromHref(a.href)}))
+      .filter(x=>x.card_no);
+    const uniq=[...new Map(links.map(x=>[x.card_no,x])).values()];
+    if(uniq.length<2) continue;
+
+    // Keep evidence rather than guessing which direction is source->target.
+    rows.push({
+      page,
+      page_url:url,
+      text,
+      card_links:uniq,
+      html:block.outerHTML
+    });
+  }
+
+  // Also keep all card links for forensic fallback.
+  const all_card_links=[...doc.querySelectorAll('a[href]')]
+    .map(a=>({href:a.href,text:clean(a.textContent),card_no:cardNoFromHref(a.href)}))
+    .filter(x=>x.card_no);
+
+  return {rows,all_card_links};
+}
+
+function nextUrl(doc,currentUrl){
+  const current=new URL(currentUrl,location.href);
+  const currentP=Number(current.searchParams.get('p')||0);
+
+  for(const a of doc.querySelectorAll('a[href]')){
+    const t=clean(a.textContent);
+    if(!/NEXT|次/.test(t)) continue;
+    try{
+      const u=new URL(a.href,location.href);
+      if(u.searchParams.get('M')==='LimitBreak' && u.searchParams.get('A')==='List'){
+        u.searchParams.set('sort','13');
+        u.searchParams.set('property','0');
+        return u.href;
+      }
+    }catch(_){}
+  }
+
+  // Numeric-page fallback, but caller stops on repeated/empty fingerprints.
+  const u=new URL(START);
+  u.searchParams.set('p',String(currentP+1));
+  return u.href;
+}
+
+let LAST=null;
+function panel(out){
+  LAST=out;
+  document.getElementById('jr-reinc-current')?.remove();
+  const d=document.createElement('div');
+  d.id='jr-reinc-current';
+  d.style.cssText='position:fixed;left:10px;right:10px;bottom:10px;z-index:2147483647;background:#111827;color:#fff;padding:12px;border-radius:14px;font:13px -apple-system,sans-serif;box-shadow:0 8px 30px #0008';
+  d.innerHTML=`<b>最新転生一覧 収集完了</b>
+    <div style="margin:7px 0">pages ${out.meta.page_count} / evidence rows ${out.meta.evidence_row_count} / errors ${out.meta.error_count}</div>
+    <button id="jrSave" style="width:100%;padding:10px;border:0;border-radius:9px;font-weight:700">JSON保存</button>`;
+  document.body.appendChild(d);
+  document.getElementById('jrSave').onclick=async()=>{
+    const txt=JSON.stringify(LAST,null,2);
+    const f=new File([txt],OUT,{type:'application/json'});
+    if(navigator.canShare&&navigator.canShare({files:[f]})){
+      await navigator.share({files:[f]});
+    }else{
+      await navigator.clipboard.writeText(txt);
+      alert('JSONをコピーしました');
+    }
+  };
+}
+
+async function run(){
+  if(!confirm('現在の公式「転生」一覧を全ページ再収集します。既存306件版は上書きしません。')) return;
+
+  const out={
+    meta:{
+      type:'jolly_reincarnation_relations_current_raw',
+      version:'2.0-evidence-first',
+      collected_at:null,
+      source_url:START,
+      page_count:0,
+      evidence_row_count:0,
+      finished:false,
+      error_count:0
+    },
+    pages:[],
+    errors:[]
+  };
+
+  let url=START;
+  const seenPageFingerprints=new Set();
+
+  for(let page=0; page<MAX_PAGES; page++){
+    try{
+      const {url:finalUrl,doc}=await getDoc(url);
+      const ex=extractPage(doc,page,finalUrl);
+      const fp=ex.all_card_links.map(x=>x.card_no).join(',');
+      if(seenPageFingerprints.has(fp) && fp){
+        out.meta.finished=true;
+        break;
+      }
+      seenPageFingerprints.add(fp);
+
+      out.pages.push({
+        page,
+        url:finalUrl,
+        evidence_rows:ex.rows,
+        all_card_links:ex.all_card_links
+      });
+
+      const next=nextUrl(doc,finalUrl);
+      if(!next){
+        out.meta.finished=true;
+        break;
+      }
+
+      // Stop when NEXT is absent and numeric fallback reaches an empty page.
+      if(ex.all_card_links.length===0 && page>0){
+        out.meta.finished=true;
+        break;
+      }
+
+      url=next;
+      await sleep(DELAY);
+    }catch(e){
+      out.errors.push({page,url,error:String(e)});
+      break;
+    }
+  }
+
+  out.meta.collected_at=new Date().toISOString();
+  out.meta.page_count=out.pages.length;
+  out.meta.evidence_row_count=out.pages.reduce((n,p)=>n+p.evidence_rows.length,0);
+  out.meta.error_count=out.errors.length;
+
+  panel(out);
+  alert(`完了\npages ${out.meta.page_count}\nevidence rows ${out.meta.evidence_row_count}\nerrors ${out.meta.error_count}\nJSON保存をタップしてください。`);
+}
+
+run().catch(e=>alert('停止: '+(e?.message||e)));
+})();
