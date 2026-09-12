@@ -1,0 +1,184 @@
+(() => {
+'use strict';
+
+const OUT='jolly_reincarnation_relations_current_v21.json';
+const BASE=`${location.origin}/?M=LimitBreak&A=List&sort=13&property=0`;
+const DELAY=500;
+const MAX_PAGES=120;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const clean=s=>String(s||'').replace(/\s+/g,' ').trim();
+
+async function getDoc(url){
+  const r=await fetch(url,{credentials:'include',cache:'no-store'});
+  const text=await r.text();
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return {url:r.url,doc:new DOMParser().parseFromString(text,'text/html')};
+}
+
+function imgInfo(img){
+  const src=img.getAttribute('src')||'';
+  const m=src.match(/\/img\/card\/(120|320)\/(\d+)\.(?:jpg|png|webp)/i);
+  if(!m) return null;
+  return {
+    size:Number(m[1]),
+    card_no:String(m[2]),
+    src:new URL(src,location.href).href,
+    alt:clean(img.getAttribute('alt')||''),
+    title:clean(img.getAttribute('title')||'')
+  };
+}
+
+function nearestText(img){
+  let e=img;
+  for(let i=0;i<5 && e;i++,e=e.parentElement){
+    const t=clean(e.innerText);
+    if(t && t.length<500) return t;
+  }
+  return '';
+}
+
+function extractRelations(doc,page,url){
+  const seq=[...doc.querySelectorAll('img')]
+    .map(img=>{
+      const info=imgInfo(img);
+      return info?{...info,text:nearestText(img)}:null;
+    })
+    .filter(Boolean);
+
+  const rel=[];
+  for(let i=0;i<seq.length;i++){
+    if(seq[i].size!==320) continue;
+    const target=seq[i];
+    let source=null;
+    for(let j=i+1;j<seq.length;j++){
+      if(seq[j].size===320) break;
+      if(seq[j].size===120){ source=seq[j]; break; }
+    }
+    if(!source) continue;
+    rel.push({
+      page,
+      source_card_no:source.card_no,
+      source_card_name:source.alt||source.title||'',
+      source_image_url:source.src,
+      target_card_no:target.card_no,
+      target_card_name:target.alt||target.title||'',
+      target_image_url:target.src,
+      evidence:{
+        source:'official_limit_break_list',
+        pairing_method:'320_then_next_120_before_next_320',
+        page_url:url,
+        target_context:target.text,
+        source_context:source.text
+      }
+    });
+  }
+  return {relations:rel, sequence:seq};
+}
+
+function pageUrl(p){
+  const u=new URL(BASE);
+  if(p>0) u.searchParams.set('p',String(p));
+  return u.href;
+}
+
+let LAST=null;
+function panel(out){
+  LAST=out;
+  document.getElementById('jr-reinc-v21')?.remove();
+  const d=document.createElement('div');
+  d.id='jr-reinc-v21';
+  d.style.cssText='position:fixed;left:10px;right:10px;bottom:10px;z-index:2147483647;background:#111827;color:#fff;padding:12px;border-radius:14px;font:13px -apple-system,sans-serif;box-shadow:0 8px 30px #0008';
+  d.innerHTML=`<b>最新転生関係 収集完了</b>
+    <div style="margin:7px 0">pages ${out.meta.page_count} / relations ${out.meta.relation_count} / errors ${out.meta.error_count}</div>
+    <button id="jrSave" style="width:100%;padding:10px;border:0;border-radius:9px;font-weight:700">JSON保存</button>`;
+  document.body.appendChild(d);
+  document.getElementById('jrSave').onclick=async()=>{
+    const txt=JSON.stringify(LAST,null,2);
+    const f=new File([txt],OUT,{type:'application/json'});
+    if(navigator.canShare&&navigator.canShare({files:[f]})){
+      await navigator.share({files:[f]});
+    }else{
+      await navigator.clipboard.writeText(txt);
+      alert('JSONをコピーしました');
+    }
+  };
+}
+
+async function run(){
+  if(!confirm('公式転生一覧を画像IDの並び（320→120）で全ページ再収集します。')) return;
+
+  const pages=[], relations=[], errors=[];
+  let emptyStreak=0;
+  let finished=false;
+
+  for(let p=0;p<MAX_PAGES;p++){
+    const url=pageUrl(p);
+    try{
+      const {url:finalUrl,doc}=await getDoc(url);
+      const ex=extractRelations(doc,p,finalUrl);
+      pages.push({
+        page:p,
+        url:finalUrl,
+        relation_count:ex.relations.length,
+        card_image_count:ex.sequence.length,
+        card_image_sequence:ex.sequence.map(x=>({size:x.size,card_no:x.card_no,src:x.src}))
+      });
+      relations.push(...ex.relations);
+
+      if(ex.sequence.length===0){
+        emptyStreak++;
+        if(p>0 && emptyStreak>=2){ finished=true; break; }
+      }else{
+        emptyStreak=0;
+      }
+    }catch(e){
+      errors.push({page:p,url,error:String(e)});
+      break;
+    }
+    await sleep(DELAY);
+  }
+
+  const pairKey=x=>`${x.source_card_no}->${x.target_card_no}`;
+  const counts={};
+  for(const r of relations) counts[pairKey(r)]=(counts[pairKey(r)]||0)+1;
+  const duplicate_pairs=Object.entries(counts).filter(([,n])=>n>1).map(([pair,count])=>({pair,count}));
+
+  const targetMap={};
+  for(const r of relations){
+    (targetMap[r.target_card_no] ||= new Set()).add(r.source_card_no);
+  }
+  const conflicting_targets=Object.entries(targetMap)
+    .filter(([,s])=>s.size>1)
+    .map(([target_card_no,s])=>({target_card_no,source_card_nos:[...s]}));
+
+  const out={
+    meta:{
+      type:'jolly_reincarnation_relations',
+      version:'jolly-reincarnation-relations-2.1',
+      collected_at:new Date().toISOString(),
+      source_origin:location.origin,
+      source_url:BASE,
+      page_count:pages.filter(x=>x.card_image_count>0).length,
+      relation_count:relations.length,
+      failed_page_count:errors.length,
+      finished,
+      error_count:errors.length
+    },
+    audit:{
+      unique_pair_count:new Set(relations.map(pairKey)).size,
+      unique_target_count:new Set(relations.map(x=>x.target_card_no)).size,
+      exact_duplicate_count:duplicate_pairs.length,
+      conflicting_target_count:conflicting_targets.length,
+      duplicate_pairs,
+      conflicting_targets
+    },
+    relations,
+    pages,
+    errors
+  };
+
+  panel(out);
+  alert(`完了\nrelations ${out.meta.relation_count}\npages ${out.meta.page_count}\nduplicates ${out.audit.exact_duplicate_count}\nconflicts ${out.audit.conflicting_target_count}\nerrors ${out.meta.error_count}\nJSON保存をタップしてください。`);
+}
+run().catch(e=>alert('停止: '+(e?.message||e)));
+})();
