@@ -1,0 +1,67 @@
+(() => {
+'use strict';
+const TARGETS=[{"card_no": "1400", "card_name": "幻妖の魔薬アルカナ", "skill_name": "瞬硬の秘法"}, {"card_no": "1401", "card_name": "疾風怪盗ボニー", "skill_name": "クイックドロウ"}, {"card_no": "1402", "card_name": "夢の船長イナリ", "skill_name": "キャプテングローリー"}];
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const clean=s=>String(s||'').replace(/\s+/g,' ').trim();
+async function get(url){
+ const r=await fetch(url,{credentials:'include',cache:'no-store'});
+ const text=await r.text();
+ if(!r.ok) throw new Error(`HTTP ${r.status}`);
+ return {url:r.url,doc:new DOMParser().parseFromString(text,'text/html')};
+}
+function extract(doc,t){
+ const body=clean(doc.body?.innerText||'');
+ const skillBlocks=[...doc.querySelectorAll('.skill_border02')].map(x=>({
+   text:clean(x.innerText),
+   html:x.outerHTML
+ }));
+ const i=body.indexOf('専用アイテム');
+ let item_section='';
+ if(i>=0){
+   const ends=['関連カード','一覧に戻る'].map(x=>body.indexOf(x,i)).filter(x=>x>=0);
+   const e=ends.length?Math.min(...ends):body.length;
+   item_section=body.slice(i,e);
+ }
+ const skill_mentions=[];
+ for(const a of doc.querySelectorAll('a[href*="skill_no="]')){
+   try{
+     const u=new URL(a.href,location.href);
+     skill_mentions.push({skill_no:u.searchParams.get('skill_no'),text:clean(a.textContent),href:u.href});
+   }catch(_){}
+ }
+ return {card_no:t.card_no,card_name:t.card_name,target_skill:t.skill_name,
+         body_text:body,item_section,skill_blocks:skillBlocks,skill_links:skill_mentions};
+}
+let LAST=null;
+function panel(out){
+ LAST=out;
+ document.getElementById('jolly-acq-evidence')?.remove();
+ const d=document.createElement('div');
+ d.id='jolly-acq-evidence';
+ d.style.cssText='position:fixed;left:10px;right:10px;bottom:10px;z-index:2147483647;background:#111827;color:#fff;padding:12px;border-radius:14px;font:13px -apple-system,sans-serif;box-shadow:0 8px 30px #0008';
+ d.innerHTML=`<b>取得経路証拠 完了</b><div style="margin:7px 0">3件中 ${out.cards.length}件・エラー ${out.errors.length}</div><button id="jrSave" style="width:100%;padding:10px;border:0;border-radius:9px;font-weight:700">JSON保存</button>`;
+ document.body.appendChild(d);
+ document.getElementById('jrSave').onclick=async()=>{
+   const txt=JSON.stringify(LAST,null,2);
+   const f=new File([txt],'jolly_skill_acquisition_evidence.json',{type:'application/json'});
+   if(navigator.canShare&&navigator.canShare({files:[f]})) await navigator.share({files:[f]});
+   else {await navigator.clipboard.writeText(txt);alert('JSONをコピーしました');}
+ };
+}
+async function run(){
+ if(!confirm('既存3カードの現在の専用アイテム欄だけ確認します。'))return;
+ const out={meta:{version:'jolly-skill-acquisition-evidence-1.0',collected_at:new Date().toISOString()},cards:[],errors:[]};
+ for(const t of TARGETS){
+  try{
+   const u=`${location.origin}/?M=Card&A=AlbumDetail&card=${encodeURIComponent(t.card_no)}`;
+   const {doc}=await get(u);
+   out.cards.push(extract(doc,t));
+  }catch(e){out.errors.push({card_no:t.card_no,error:String(e)});}
+  await sleep(500);
+ }
+ out.meta.success_count=out.cards.length;out.meta.error_count=out.errors.length;
+ panel(out);
+ alert(`完了：${out.cards.length}/3、エラー ${out.errors.length}\nJSON保存をタップしてください。`);
+}
+run().catch(e=>alert('停止: '+(e?.message||e)));
+})();
