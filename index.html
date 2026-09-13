@@ -52,12 +52,13 @@ input,select{font:inherit;width:100%;border:1px solid #d1d5db;background:#fff;bo
 </head>
 <body>
 <div class="app">
-<h1>JOLLY DB <span class="small">v5.0 iPhone UI</span></h1>
+<h1>JOLLY DB <span class="small">v6.0 統合UI</span></h1>
 <div class="controls">
   <div class="tabs">
     <button id="tSkills" class="active">スキル</button>
     <button id="tCards">カード</button>
     <button id="tAffinity">相性</button>
+    <button id="tLatent">潜在耐性</button>
     <button id="tStatuses">異常状態</button>
   </div>
 
@@ -129,6 +130,33 @@ input,select{font:inherit;width:100%;border:1px solid #d1d5db;background:#fff;bo
     </div>
   </div>
 
+  <div id="cLatent" class="hidden">
+    <div class="skillAddRow">
+      <select id="latentStatusSelect"><option value="">異常状態を選択</option></select>
+      <button id="addLatentStatus">追加</button>
+    </div>
+    <div class="selectedSkills" id="selectedLatentStatuses"></div>
+    <details class="filterPanel" open>
+      <summary>カード条件</summary>
+      <div class="filterBody">
+        <div class="row">
+          <select id="latentProp"><option value="">全属性</option></select>
+          <select id="latentGender"><option value="">全性別</option></select>
+        </div>
+        <select id="latentRoute">
+          <option value="">防止ルート：すべて</option>
+          <option value="normal">通常形態で防止</option>
+          <option value="divine">神格形態で防止</option>
+          <option value="demonic">魔格形態で防止</option>
+        </select>
+        <label class="check"><input id="latentOwned" type="checkbox">系列の保有カードのみ</label>
+        <label class="check"><input id="latentOwnedPriority" type="checkbox" checked>保有・育成中を上に表示</label>
+        <div class="small">追加した異常状態を <b>すべて（AND）</b> 防げるカードを表示します。通常の潜在能力に加えて、神格化・魔格化後の特殊スキル耐性も別ルートとして判定します。</div>
+        <div class="notice" id="inventoryState">育成情報を読み込み中…</div>
+      </div>
+    </details>
+  </div>
+
   <div id="cStatuses" class="hidden"><input id="stq" type="search" placeholder="異常状態名・説明を検索"></div>
 </div>
 
@@ -148,11 +176,14 @@ input,select{font:inherit;width:100%;border:1px solid #d1d5db;background:#fff;bo
 
 <script>
 const DB='jolly_card_db_latest.json';
+const INVENTORY_DB='training/user_inventory.json';
 const $=id=>document.getElementById(id);
 const norm=s=>(s??'').toString().normalize('NFKC').toLowerCase();
 const esc=s=>(s??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let data={cards:[],skills:[],supplemental_skills:[],statuses:[]},mode='skills',affinityMode='card';
+let inventoryData=null,inventoryByNo=new Map(),inventoryLoaded=false,evolutionByBaseNo=new Map(),baseByEvolvedNo=new Map();
 let selectedAffinitySkillNames=[];
+let selectedLatentStatuses=[];
 
 /*
   タブごとの表示位置を記憶する。
@@ -163,6 +194,7 @@ const scrollByMode={
   skills:0,
   cards:0,
   affinity:0,
+  latent:0,
   statuses:0
 };
 
@@ -202,6 +234,65 @@ function allSpecialSkills(){
   return out;
 }
 function searchableSkills(){return [...allSkills(),...allSpecialSkills()]}
+
+function stripEvolutionPrefix(name){return String(name||'').replace(/^【(?:神格|魔格)】/,'')}
+function invFor(c){return inventoryByNo.get(String(c?.card_no||''))||null}
+function ownedNow(c){
+  const i=invFor(c);
+  return inventoryLoaded ? Number(i?.owned_count||0)>0 : !!c?.owned;
+}
+function trainingNow(c){
+  const i=invFor(c);
+  return !!(i&&(i.training||Number(i.awakening_count||0)>0));
+}
+function buildEvolutionIndex(){
+  evolutionByBaseNo=new Map();baseByEvolvedNo=new Map();
+  const normalByName=new Map((data.cards||[]).filter(c=>!c.is_evolved).map(c=>[c.card_name,c]));
+  for(const e of (data.cards||[]).filter(c=>c.is_evolved||c.evolution_type)){
+    const b=normalByName.get(stripEvolutionPrefix(e.card_name));
+    if(!b)continue;
+    const no=String(b.card_no);
+    if(!evolutionByBaseNo.has(no))evolutionByBaseNo.set(no,{base:b,divine:null,demonic:null});
+    const fam=evolutionByBaseNo.get(no);
+    if(e.evolution_type==='divine')fam.divine=e;
+    if(e.evolution_type==='demonic')fam.demonic=e;
+    baseByEvolvedNo.set(String(e.card_no),b);
+  }
+}
+function familyFor(c){
+  if(!c)return {base:null,divine:null,demonic:null};
+  const base=(c.is_evolved||c.evolution_type)?(baseByEvolvedNo.get(String(c.card_no))||c):c;
+  return evolutionByBaseNo.get(String(base.card_no))||{base,divine:null,demonic:null};
+}
+function familyOwned(f){
+  return [f.base,f.divine,f.demonic].some(c=>c&&ownedNow(c));
+}
+function familyTraining(f){
+  return [f.base,f.divine,f.demonic].some(c=>c&&trainingNow(c));
+}
+function inventoryLine(c,label=''){
+  if(!c)return '';
+  const i=invFor(c);
+  const prefix=label?`<b>${esc(label)}</b> `:'';
+  if(!inventoryLoaded)return `${prefix}<span class="small">育成DB未読込</span>`;
+  if(!i||Number(i.owned_count||0)<=0)return `${prefix}<span class="small">未保有</span>`;
+  const now=Number(i.awakening_count||0),mx=Number(i.awakening_max_site??i.awakening_max??0);
+  const rem=Number(i.remaining_awakenings_before_reincarnation??i.remaining_awakenings_site??i.remaining_awakenings??Math.max(0,mx-now));
+  const through=i.remaining_awakenings_through_reincarnation;
+  const total=i.usable_materials_if_all_spent_here?.total;
+  return `${prefix}<span class="tag owned">保有 ${Number(i.owned_count||0)}枚</span>
+    <span class="small">覚醒 ${now}/${mx||'?'}・現在残り ${rem}${through!=null?`・転生後込み ${Number(through)}`:''}${total!=null?`・投入可能素材 ${Number(total)}`:''}</span>`;
+}
+function inventoryPanel(c){
+  const f=familyFor(c);
+  if(!f.base)return '';
+  const rows=[
+    inventoryLine(f.base,'通常'),
+    f.divine?inventoryLine(f.divine,'神格'):'',
+    f.demonic?inventoryLine(f.demonic,'魔格'):''
+  ].filter(Boolean).map(x=>`<div style="padding:5px 0;border-bottom:1px solid #eee">${x}</div>`).join('');
+  return `<details class="fold"><summary>保有・育成状況</summary><div class="foldBody">${rows||'<div class="small">情報なし</div>'}</div></details>`;
+}
 
 function statusNames(){return new Set((data.statuses||[]).map(x=>x.異常状態名).filter(Boolean))}
 function quotedStatuses(text){
@@ -285,7 +376,7 @@ function setMode(m){
 
   mode=m;
 
-  for(const x of ['Skills','Cards','Affinity','Statuses']){
+  for(const x of ['Skills','Cards','Affinity','Latent','Statuses']){
     $('t'+x).classList.toggle(
       'active',
       m===x.toLowerCase()
@@ -309,10 +400,165 @@ function build(){
   $('status').innerHTML='<option value="">全異常状態</option>'+ss.map(x=>`<option>${esc(x)}</option>`).join('');
   $('prop').innerHTML='<option value="">全属性</option>'+ps.map(x=>`<option>${esc(x)}</option>`).join('');
   $('gender').innerHTML='<option value="">全性別</option>'+ge.map(x=>`<option>${esc(x)}</option>`).join('');
+  $('latentProp').innerHTML='<option value="">全属性</option>'+ps.map(x=>`<option>${esc(x)}</option>`).join('');
+  $('latentGender').innerHTML='<option value="">全性別</option>'+ge.map(x=>`<option>${esc(x)}</option>`).join('');
+  $('latentStatusSelect').innerHTML='<option value="">異常状態を選択</option>'+ss.map(x=>`<option>${esc(x)}</option>`).join('');
   $('cardNames').innerHTML=data.cards.map(c=>`<option value="${esc(c.card_name)}"></option>`).join('');
   $('skillNames').innerHTML=searchableSkills().map(x=>`<option value="${esc(sname(x))}"></option>`).join('');
 }
 function findSkillByName(name){return searchableSkills().find(x=>sname(x)===name)}
+function latentOnlyImmunitySources(c){
+  const out=new Map();
+  function add(status,label,skill){
+    if(!out.has(status))out.set(status,[]);
+    const rows=out.get(status);
+    if(!rows.some(x=>x.label===label))rows.push({label,skill});
+  }
+  function scan(sk,labelPrefix){
+    if(!sk||sgenre(sk)!=='潜在能力系')return;
+    const ef=seffect(sk);
+    if(!ef.includes('受け付けない'))return;
+    for(const st of quotedStatuses(ef))add(st,`${labelPrefix}「${sname(sk)}」`,sk);
+  }
+  for(const sk of (c.skills||[]))scan(sk,'潜在能力');
+  for(const sk of (c.unlock_skills||[]))scan(sk,'解放潜在');
+  for(const x of (c.skill_changes||[])){if(x.to_skill)scan(x.to_skill,'変化後潜在')}
+  return out;
+}
+function mergeSourceMaps(...maps){
+  const out=new Map();
+  for(const mp of maps){
+    for(const [st,rows] of mp.entries()){
+      if(!out.has(st))out.set(st,[]);
+      for(const row of rows)if(!out.get(st).some(x=>x.label===row.label))out.get(st).push(row);
+    }
+  }
+  return out;
+}
+function evolutionImmunitySources(c,routeLabel){
+  const out=new Map();
+  if(!c)return out;
+  function add(st,label,skill=null){
+    if(!st)return;
+    if(!out.has(st))out.set(st,[]);
+    if(!out.get(st).some(x=>x.label===label))out.get(st).push({label,skill});
+  }
+  for(const st of (c.evolution_immunity_statuses||[]))add(st,`${routeLabel}特殊耐性`,null);
+  for(const sk of (c.special_skills||[])){
+    const sts=Array.isArray(sk.immunity_statuses)&&sk.immunity_statuses.length
+      ? sk.immunity_statuses
+      : (seffect(sk).includes('受け付けない')?quotedStatuses(seffect(sk)):[]);
+    for(const st of sts)add(st,`${routeLabel}特殊スキル「${sname(sk)}」`,sk);
+  }
+  return out;
+}
+function routeInfoForBase(base){
+  const fam=familyFor(base);
+  const normal=latentOnlyImmunitySources(base);
+  const divine=fam.divine?mergeSourceMaps(normal,evolutionImmunitySources(fam.divine,'神格')):new Map();
+  const demonic=fam.demonic?mergeSourceMaps(normal,evolutionImmunitySources(fam.demonic,'魔格')):new Map();
+  const ok=mp=>selectedLatentStatuses.length>0&&selectedLatentStatuses.every(st=>mp.has(st));
+  return {
+    family:fam,
+    normal:{ok:ok(normal),sources:normal,card:base,label:'通常'},
+    divine:{ok:ok(divine),sources:divine,card:fam.divine,label:'神格'},
+    demonic:{ok:ok(demonic),sources:demonic,card:fam.demonic,label:'魔格'}
+  };
+}
+function renderLatentStatusChips(){
+  $('selectedLatentStatuses').innerHTML=selectedLatentStatuses.map((name,i)=>`<span class="skillChip">${esc(name)}<button onclick="removeLatentStatus(${i})">×</button></span>`).join('');
+}
+function addLatentStatus(){
+  const name=$('latentStatusSelect').value;if(!name)return;
+  if(!selectedLatentStatuses.includes(name))selectedLatentStatuses.push(name);
+  $('latentStatusSelect').value='';renderLatentStatusChips();render();
+}
+function removeLatentStatus(i){selectedLatentStatuses.splice(i,1);renderLatentStatusChips();render()}
+function latentResistanceRows(){
+  const p=$('latentProp').value,g=$('latentGender').value,ownedOnly=$('latentOwned').checked,route=$('latentRoute').value;
+  if(!selectedLatentStatuses.length)return [];
+  let rows=[];
+  for(const c of (data.cards||[])){
+    if(c.is_evolved||c.evolution_type)continue;
+    if(p&&c.property!==p)continue;
+    if(g&&c.gender!==g)continue;
+    const r=routeInfoForBase(c);
+    if(ownedOnly&&!familyOwned(r.family))continue;
+    const pass=route ? r[route]?.ok : (r.normal.ok||r.divine.ok||r.demonic.ok);
+    if(!pass)continue;
+    rows.push({c,...r});
+  }
+  function readyScore(x){
+    const q=[x.normal,x.divine,x.demonic].filter(r=>r.ok&&r.card);
+    if(q.some(r=>ownedNow(r.card)))return 0;
+    if(ownedNow(x.c)&&q.length)return 1;
+    if(familyTraining(x.family))return 2;
+    if(familyOwned(x.family))return 3;
+    return 4;
+  }
+  rows.sort((a,b)=>{
+    if($('latentOwnedPriority').checked){
+      const d=readyScore(a)-readyScore(b);if(d)return d;
+    }
+    return String(a.c.card_name||'').localeCompare(String(b.c.card_name||''),'ja');
+  });
+  return rows;
+}
+function routeBadge(r,key){
+  if(!r.ok||!r.card)return '';
+  const owned=ownedNow(r.card);
+  const cls=owned?'tag owned':'tag';
+  const name=key==='normal'?'通常':key==='divine'?'神格':'魔格';
+  return `<span class="${cls}">${owned?'★ ':''}${name}で防止</span>`;
+}
+function developmentAdvice(x){
+  const qualifying=[['normal',x.normal],['divine',x.divine],['demonic',x.demonic]].filter(([k,r])=>r.ok&&r.card);
+  const ownedQual=qualifying.filter(([k,r])=>ownedNow(r.card));
+  if(ownedQual.length)return `今すぐ候補：${ownedQual.map(([k])=>k==='normal'?'通常':k==='divine'?'神格':'魔格').join('・')}形態を保有`;
+  if(ownedNow(x.c)){
+    const evol=qualifying.filter(([k])=>k!=='normal').map(([k])=>k==='divine'?'神格':'魔格');
+    if(evol.length)return `育成候補：通常形態を保有。${evol.join('・')}形態で条件達成`;
+    if(x.normal.ok)return '今すぐ候補：通常形態で条件達成';
+  }
+  if(familyOwned(x.family))return '系列カードを保有。該当形態への到達可否を確認';
+  return '未保有：将来候補';
+}
+function sourceDetailsForRoute(r,key){
+  if(!r.ok)return '';
+  const label=key==='normal'?'通常形態':key==='divine'?'神格形態':'魔格形態';
+  const protections=selectedLatentStatuses.map(st=>{
+    const rows=r.sources.get(st)||[];
+    return `<div style="padding:5px 0;border-bottom:1px solid #eee"><b>${statusButton(st)}</b><div class="small">${rows.map(y=>esc(y.label)).join(' / ')}</div></div>`;
+  }).join('');
+  const skills=[];
+  for(const st of selectedLatentStatuses)for(const y of (r.sources.get(st)||[])){
+    if(y.skill&&!skills.some(s=>sname(s)===sname(y.skill)))skills.push(y.skill);
+  }
+  return `<details class="fold" ${key==='normal'?'open':''}><summary>${label}の防止根拠</summary><div class="foldBody">${protections}${skills.length?skills.map(s=>skillBlock(s)).join(''):''}</div></details>`;
+}
+function latentResistanceCard(x){
+  const c=x.c;
+  return `<div class="card">
+    <div class="cardTop">
+      ${imageHtml(c)}
+      <div>
+        <div class="title">${familyOwned(x.family)?'★ ':''}${esc(c.card_name)}</div>
+        <div class="sub">No.${esc(c.card_no)} · ${esc(c.property)} · ${esc(c.gender||'?')} · ${esc(c.rarity_name||'')}</div>
+        <div class="tags">${routeBadge(x.normal,'normal')}${routeBadge(x.divine,'divine')}${routeBadge(x.demonic,'demonic')}</div>
+      </div>
+      <button onclick="toggle(this)">詳細</button>
+    </div>
+    <div class="reasonBox"><div class="reasonTitle">育成判断</div><div class="reason">${esc(developmentAdvice(x))}</div></div>
+    <div class="effect">${selectedLatentStatuses.map(esc).join(' ＋ ')} をANDで防止可能</div>
+    <div class="detail">
+      ${inventoryPanel(c)}
+      ${sourceDetailsForRoute(x.normal,'normal')}
+      ${sourceDetailsForRoute(x.divine,'divine')}
+      ${sourceDetailsForRoute(x.demonic,'demonic')}
+    </div>
+  </div>`;
+}
+
 function renderAffinitySkillChips(){
   $('selectedAffinitySkills').innerHTML=selectedAffinitySkillNames.map((name,i)=>`<span class="skillChip">${esc(name)}<button onclick="removeAffinitySkill(${i})">×</button></span>`).join('');
 }
@@ -478,6 +724,7 @@ function cardCard(c){
     </div>
     <div class="detail">
       ${imageHtml(c,true)}
+      ${inventoryPanel(c)}
       <div class="quickStats"><div class="quickStat"><span>HP</span><b>${esc(c.hp_min)}〜${esc(c.hp_max)}</b></div><div class="quickStat"><span>攻撃</span><b>${esc(c.attack_min)}〜${esc(c.attack_max)}</b></div><div class="quickStat"><span>速さ</span><b>${esc(c.speed_min)}〜${esc(c.speed_max)}</b></div><div class="quickStat"><span>Cost</span><b>${esc(c.cost??'')}</b></div></div>
       ${c.description?`<details class="fold"><summary>カード説明</summary><div class="foldBody effect">${esc(c.description)}</div></details>`:''}
       <details class="fold" open><summary>通常スキル ${(c.skills||[]).length}件</summary><div class="foldBody">${base||'<div class="small">なし</div>'}</div></details>
@@ -628,6 +875,15 @@ function render(){
     if(!a.target){$('meta').textContent='カード名が見つかりません';out.innerHTML='';return}
     $('meta').textContent=`対象: ${a.target.card_name}（${a.target.property}/${a.target.gender||'?'}） · ${a.rows.length}スキル`;
     out.innerHTML=a.rows.slice(0,500).map(affinitySkillCard).join('')||'<div class="card">該当なし</div>';
+  }else if(mode==='latent'){
+    if(!selectedLatentStatuses.length){
+      $('meta').textContent='異常状態を1つ以上追加してください（追加した状態はAND条件）';
+      out.innerHTML='<div class="card"><div class="small">例：恐怖 ＋ 混乱 ＋ 狂乱 → 3状態すべてを潜在能力系で防げるカードだけを表示します。</div></div>';
+      return;
+    }
+    const rows=latentResistanceRows();
+    $('meta').innerHTML=`${rows.length}カード · AND ${selectedLatentStatuses.length}状態<br><span class="small">${selectedLatentStatuses.map(esc).join(' ＋ ')}</span>`;
+    out.innerHTML=rows.slice(0,700).map(latentResistanceCard).join('')||'<div class="card">該当なし</div>';
   }else{
     const q=norm($('stq').value),rows=(data.statuses||[]).filter(x=>!q||norm([x.異常状態名,x.説明,(x.関連スキル||[]).join(' ')].join(' ')).includes(q));
     $('meta').textContent=`${rows.length}件 / 全${data.statuses.length}件`;
@@ -640,19 +896,38 @@ function jumpCard(name){setMode('cards');$('cq').value=name;$('prop').value='';$
 
 ['sq','cq','aq','stq'].forEach(id=>$(id).addEventListener('input',render));
 $('asq').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();addAffinitySkill()}});
-['genre','status','prop','gender','amatch','adir','impactFilter','defOwned','affinitySort'].forEach(id=>$(id).addEventListener('change',render));
-['owned','ownedPriority','aowned','impactOwnedPriority'].forEach(id=>$(id).addEventListener('change',render));
-$('tSkills').onclick=()=>setMode('skills');$('tCards').onclick=()=>setMode('cards');$('tAffinity').onclick=()=>setMode('affinity');$('tStatuses').onclick=()=>setMode('statuses');
+['genre','status','prop','gender','amatch','adir','impactFilter','defOwned','affinitySort','latentProp','latentGender','latentRoute'].forEach(id=>$(id).addEventListener('change',render));
+['owned','ownedPriority','aowned','impactOwnedPriority','latentOwned','latentOwnedPriority'].forEach(id=>$(id).addEventListener('change',render));
+$('tSkills').onclick=()=>setMode('skills');$('tCards').onclick=()=>setMode('cards');$('tAffinity').onclick=()=>setMode('affinity');$('tLatent').onclick=()=>setMode('latent');$('tStatuses').onclick=()=>setMode('statuses');
 $('back').onclick=()=>scrollTo({top:0,behavior:'smooth'});
 $('affByCard').onclick=()=>{affinityMode='card';$('affByCard').classList.add('active');$('affBySkill').classList.remove('active');$('affCardPane').classList.remove('hidden');$('affSkillPane').classList.add('hidden');render()};
 $('affBySkill').onclick=()=>{affinityMode='skill';$('affBySkill').classList.add('active');$('affByCard').classList.remove('active');$('affSkillPane').classList.remove('hidden');$('affCardPane').classList.add('hidden');render()};
 $('addAffinitySkill').onclick=addAffinitySkill;
+$('addLatentStatus').onclick=addLatentStatus;
 $('smClose').onclick=closeStatus;$('statusModal').onclick=e=>{if(e.target===$('statusModal'))closeStatus()};
 
-fetch(DB+'?t='+Date.now(),{cache:'no-store'})
-.then(r=>{if(!r.ok)throw Error('HTTP '+r.status);return r.json()})
-.then(o=>{data=o;build();render()})
-.catch(e=>{$('meta').textContent='読込失敗: '+e.message+'。index.htmlと同じ場所に jolly_card_db_latest.json を置いてください。'});
+Promise.allSettled([
+  fetch(DB+'?t='+Date.now(),{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('カードDB HTTP '+r.status);return r.json()}),
+  fetch(INVENTORY_DB+'?t='+Date.now(),{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('育成DB HTTP '+r.status);return r.json()})
+]).then(([dbRes,invRes])=>{
+  if(dbRes.status!=='fulfilled')throw dbRes.reason;
+  data=dbRes.value;
+  if(invRes.status==='fulfilled'&&Array.isArray(invRes.value?.cards)){
+    inventoryData=invRes.value;inventoryLoaded=true;
+    inventoryByNo=new Map((inventoryData.cards||[]).map(c=>[String(c.card_no),c]));
+    for(const c of (data.cards||[]))c.owned=Number(invFor(c)?.owned_count||0)>0;
+    const built=inventoryData.meta?.built_at||'日時不明';
+    $('inventoryState').innerHTML=`育成DB連携済み · ${esc(String(inventoryData.meta?.owned_card_type_count??inventoryData.cards.length))}種類 · ${esc(built)}`;
+  }else{
+    inventoryLoaded=false;
+    $('inventoryState').textContent='育成DB未連携：カードDBの保有フラグで表示します';
+  }
+  buildEvolutionIndex();
+  build();render();
+}).catch(e=>{
+  $('meta').textContent='読込失敗: '+e.message+'。index.htmlと同じ場所に jolly_card_db_latest.json を置いてください。';
+  $('inventoryState').textContent='育成DB未読込';
+});
 </script>
 </body>
 </html>
