@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#111827">
-<title>JOLLY DB v5.0</title>
+<title>JOLLY DB v7.0</title>
 <style>
 :root{font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;color:#111827;background:#f3f4f6}
 *{box-sizing:border-box}body{margin:0}.app{max-width:980px;margin:auto;padding:12px 12px 92px}
@@ -41,6 +41,8 @@ input,select{font:inherit;width:100%;border:1px solid #d1d5db;background:#fff;bo
 .skillChip{display:inline-flex;align-items:center;gap:6px;border:1px solid #c7d2fe;background:#eef2ff;border-radius:999px;padding:6px 8px 6px 10px;font-size:12px;font-weight:700}
 .skillChip button{border:0;background:#fff;width:22px;height:22px;border-radius:999px;padding:0;font-size:13px;line-height:20px}
 .perSkillJudge{border-top:1px solid #e5e7eb;padding:8px 0}.perSkillJudge:first-child{border-top:0}
+.dataState{display:flex;flex-wrap:wrap;gap:6px}.dataPill{font-size:11px;border-radius:999px;padding:5px 8px;background:#e5e7eb;color:#374151}.dataPill.ok{background:#dcfce7;color:#166534}.dataPill.warn{background:#fef3c7;color:#92400e}
+.slotGrid{display:grid;gap:5px;margin-top:8px}.slot{border:1px solid #e5e7eb;border-radius:9px;padding:7px 8px;font-size:12px;background:#f8fafc}.slot.empty{color:#92400e;background:#fffbeb;border-color:#fde68a}.slot.unknown{color:#6b7280}.instanceHead{display:flex;justify-content:space-between;gap:8px;align-items:start}.resourceCount{font-size:20px;font-weight:900;white-space:nowrap}.resourceImg{width:52px;height:52px;border-radius:10px;object-fit:cover;background:#e5e7eb}.loadErrors{white-space:pre-wrap}
 
 .modalBg{display:none;position:fixed;inset:0;background:#0008;z-index:100;align-items:flex-end;justify-content:center}.modalBg.open{display:flex}
 .modal{width:100%;max-width:700px;max-height:78vh;overflow:auto;background:#fff;border-radius:20px 20px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom))}
@@ -52,7 +54,7 @@ input,select{font:inherit;width:100%;border:1px solid #d1d5db;background:#fff;bo
 </head>
 <body>
 <div class="app">
-<h1>JOLLY DB <span class="small">v6.0 統合UI</span></h1>
+<h1>JOLLY DB <span class="small">v7.0 所有・技玉・アイテム統合</span></h1>
 <div class="controls">
   <div class="tabs">
     <button id="tSkills" class="active">スキル</button>
@@ -60,6 +62,9 @@ input,select{font:inherit;width:100%;border:1px solid #d1d5db;background:#fff;bo
     <button id="tAffinity">相性</button>
     <button id="tLatent">潜在耐性</button>
     <button id="tStatuses">異常状態</button>
+    <button id="tOwned">所有個体</button>
+    <button id="tSkillballs">技玉</button>
+    <button id="tItems">アイテム</button>
   </div>
 
   <div id="cSkills">
@@ -158,6 +163,35 @@ input,select{font:inherit;width:100%;border:1px solid #d1d5db;background:#fff;bo
   </div>
 
   <div id="cStatuses" class="hidden"><input id="stq" type="search" placeholder="異常状態名・説明を検索"></div>
+
+  <div id="cOwned" class="hidden">
+    <input id="oq" type="search" placeholder="カード名・現在技・個体IDを検索">
+    <details class="filterPanel">
+      <summary>所有個体の条件</summary>
+      <div class="filterBody">
+        <div class="row">
+          <select id="ownedLocation"><option value="">カード一覧＋倉庫</option><option value="card_list">カード一覧</option><option value="stock">倉庫</option></select>
+          <select id="ownedSkillFilter"><option value="">現在技：すべて</option><option value="empty">空き技枠あり</option><option value="skillball">技玉装着を確認</option><option value="extra">固有技以外あり</option><option value="unclassified">未分類の追加技あり</option><option value="unavailable">現在技を取得できない倉庫</option></select>
+        </div>
+        <label class="check"><input id="ownedProtected" type="checkbox">保護中のみ</label>
+      </div>
+    </details>
+    <div class="notice" id="userStateNotice">所有データを読み込み中…</div>
+  </div>
+
+  <div id="cSkillballs" class="hidden">
+    <input id="bq" type="search" placeholder="技玉名・効果・装着条件を検索">
+    <details class="filterPanel"><summary>技玉の条件</summary><div class="filterBody">
+      <div class="row"><select id="ballProperty"><option value="">全属性</option></select><select id="ballSort"><option value="count_desc">所持数が多い順</option><option value="name">名前順</option></select></div>
+    </div></details>
+  </div>
+
+  <div id="cItems" class="hidden">
+    <input id="iq" type="search" placeholder="アイテム名・説明・対象カードを検索">
+    <details class="filterPanel"><summary>アイテムの条件</summary><div class="filterBody">
+      <div class="row"><select id="itemCategory"><option value="">全カテゴリ</option></select><select id="itemSort"><option value="count_desc">所持数が多い順</option><option value="name">名前順</option></select></div>
+    </div></details>
+  </div>
 </div>
 
 <div class="meta" id="meta">jolly_card_db_latest.json を読み込み中…</div>
@@ -177,11 +211,18 @@ input,select{font:inherit;width:100%;border:1px solid #d1d5db;background:#fff;bo
 <script>
 const DB='jolly_card_db_latest.json';
 const INVENTORY_DB='training/user_inventory.json';
+const RAW_INVENTORY_DB='training/jolly_user_inventory_raw_v2.json';
+const CURRENT_SKILLS_DB='training/jolly_owned_current_skills.json';
+const SKILLBALLS_DB='training/jolly_user_skillballs.json';
+const ITEMS_DB='training/jolly_user_items.json';
 const $=id=>document.getElementById(id);
 const norm=s=>(s??'').toString().normalize('NFKC').toLowerCase();
 const esc=s=>(s??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let data={cards:[],skills:[],supplemental_skills:[],statuses:[]},mode='skills',affinityMode='card';
 let inventoryData=null,inventoryByNo=new Map(),inventoryLoaded=false,evolutionByBaseNo=new Map(),baseByEvolvedNo=new Map();
+let rawInventoryData=null,ownedInstances=[],ownedByNo=new Map(),awakeningByInstance=new Map();
+let currentSkillsData=null,currentSkillByInstance=new Map(),skillballsData=null,itemsData=null;
+let optionalLoadErrors=[];
 let selectedAffinitySkillNames=[];
 let selectedLatentStatuses=[];
 
@@ -195,7 +236,10 @@ const scrollByMode={
   cards:0,
   affinity:0,
   latent:0,
-  statuses:0
+  statuses:0,
+  owned:0,
+  skillballs:0,
+  items:0
 };
 
 function restoreModeScroll(m){
@@ -294,6 +338,83 @@ function inventoryPanel(c){
   return `<details class="fold"><summary>保有・育成状況</summary><div class="foldBody">${rows||'<div class="small">情報なし</div>'}</div></details>`;
 }
 
+const classLabel={
+  master_native:'固有技',item_change_from:'アイテム変化前',item_change_to:'アイテム変化後',
+  item_unlock:'アイテム解放',special_form:'特殊形態',owned_skillball_match:'技玉装着',
+  unclassified_non_native:'追加技（未分類）'
+};
+const itemCategoryLabel={
+  reincarnation_material:'転生・強化素材',status_up:'ステータス強化',
+  divine_demonic_evolution_material:'神格・魔格素材',limit_break_material:'限界突破素材',
+  dedicated_skill_change_or_unlock:'専用技変化・解放'
+};
+function masterCardByNo(no){return (data.cards||[]).find(c=>String(c.card_no)===String(no))||null}
+function currentForInstance(id){return currentSkillByInstance.get(String(id))||null}
+function stateForInstance(x){return currentForInstance(x.instance_id)?.current_skill_state||null}
+function hasClass(st,name){return (st?.skills||[]).some(s=>s.classification===name)}
+function hasExtraSkill(st){return (st?.skills||[]).some(s=>s.classification&&s.classification!=='master_native')}
+function initRawInventory(raw){
+  rawInventoryData=raw;
+  ownedInstances=Array.isArray(raw?.owned_instances)?raw.owned_instances:[];
+  awakeningByInstance=new Map((raw?.awakening_cards||[]).map(x=>[String(x.base_instance_id),x]));
+  ownedByNo=new Map();
+  for(const x of ownedInstances){
+    const no=String(x.card_image_id||'');
+    if(!ownedByNo.has(no))ownedByNo.set(no,[]);
+    ownedByNo.get(no).push(x);
+  }
+}
+function instanceSkillSlots(st){
+  if(!st)return '<div class="slot unknown">現在技：取得元未確立（倉庫）</div>';
+  const bySlot=new Map((st.skills||[]).map(s=>[Number(s.slot_index),s]));
+  return (st.slot_labels||[]).map((label,i)=>{
+    const sk=bySlot.get(i+1),empty=label==='SKILL SLOT',dash=label==='－';
+    const cls=empty?' empty':dash?' unknown':'';
+    const suffix=sk?.classification?` · ${classLabel[sk.classification]||sk.classification}`:'';
+    return `<div class="slot${cls}">${i+1}. ${esc(empty?'空き技枠':label)}${esc(suffix)}</div>`;
+  }).join('');
+}
+function instanceBadges(x,st){
+  const a=[];
+  a.push(`<span class="tag">${x.location==='stock'?'倉庫':'カード一覧'}</span>`);
+  if(x.protected)a.push('<span class="tag owned">保護中</span>');
+  if(Number(st?.empty_skill_slot_count||0)>0)a.push(`<span class="tag unlock">空き ${Number(st.empty_skill_slot_count)}</span>`);
+  if(hasClass(st,'owned_skillball_match'))a.push('<span class="tag special">技玉装着</span>');
+  if(hasClass(st,'unclassified_non_native'))a.push('<span class="tag neg">追加技・未分類</span>');
+  return a.join('');
+}
+function ownedInstanceCard(x,compact=false){
+  const st=stateForInstance(x),aw=awakeningByInstance.get(String(x.instance_id));
+  const master=masterCardByNo(x.card_image_id);
+  const title=x.card_name||master?.card_name||`No.${x.card_image_id}`;
+  const stats=`Lv ${Number(x.level||0)}/${Number(x.level_max||0)} · HP ${Number(x.hp||0)} · 攻 ${Number(x.attack||0)} · 速 ${Number(x.speed||0)} · Cost ${x.cost??''}`;
+  const awakening=aw?`覚醒 ${Number(aw.awakening_count||0)}/${Number(aw.awakening_max_site||0)} · 残り ${Number(aw.remaining_awakenings_site||0)}`:'';
+  return `<div class="card">
+    <div class="instanceHead"><div><div class="title">${esc(title)}</div><div class="sub">個体ID ${esc(x.instance_id)} · No.${esc(x.card_image_id)} · ${esc(stats)}</div></div>${master?`<button onclick="jumpCard('${esc(master.card_name)}')">カード</button>`:''}</div>
+    <div class="tags">${instanceBadges(x,st)}</div>${awakening?`<div class="small">${esc(awakening)}</div>`:''}
+    ${compact?`<details class="fold"><summary>現在技</summary><div class="foldBody slotGrid">${instanceSkillSlots(st)}</div></details>`:`<div class="slotGrid">${instanceSkillSlots(st)}</div>`}
+  </div>`;
+}
+function ownedInstancesPanel(c){
+  const rows=ownedByNo.get(String(c?.card_no||''))||[];
+  if(!rows.length)return '';
+  return `<details class="fold"><summary>所有個体・現在技 ${rows.length}体</summary><div class="foldBody">${rows.map(x=>ownedInstanceCard(x,true)).join('')}</div></details>`;
+}
+function constraintText(x){
+  const c=x?.install_constraints||{},a=[];
+  if(c.rarity_value)a.push(`★${c.rarity_value}${c.rarity_mode==='at_least'?'以上':''}`);
+  if(c.property)a.push(c.property);
+  if(c.specific_card_name)a.push(c.specific_card_name+'専用');
+  return a.join(' / ')||'制限なし・不明';
+}
+function skillballCard(x){
+  return `<div class="card"><div class="cardTop">${x.image_url?`<img class="resourceImg" src="${esc(x.image_url)}" loading="lazy">`:'<div class="resourceImg"></div>'}<div><div class="title">${esc(x.skill_name||x.display_name)}</div><div class="sub">技玉No.${esc(x.skillball_no)} · ${esc(constraintText(x))}</div></div><div class="resourceCount">×${Number(x.owned_count||0)}</div></div><div class="effect" style="margin-top:9px">${esc(x.effect_text||'')}</div></div>`;
+}
+function itemCard(x){
+  const links=(x.applicable_cards||[]).map(c=>`<button class="mini" onclick="jumpCard('${esc(c.card_name)}')">${esc(c.card_name)} · ${c.relation_type==='change'?'技変化':'技解放'}</button>`).join('');
+  return `<div class="card"><div class="cardTop">${x.image_url?`<img class="resourceImg" src="${esc(x.image_url)}" loading="lazy">`:'<div class="resourceImg"></div>'}<div><div class="title">${esc(x.item_name)}</div><div class="sub">${esc(itemCategoryLabel[x.category]||x.category||'未分類')} · Item ${esc(x.item_id)}</div></div><div class="resourceCount">×${Number(x.owned_count||0)}</div></div><div class="effect" style="margin-top:9px">${esc(x.detail||'')}</div>${links?`<div class="related">${links}</div>`:''}</div>`;
+}
+
 function statusNames(){return new Set((data.statuses||[]).map(x=>x.異常状態名).filter(Boolean))}
 function quotedStatuses(text){
   const known=statusNames(),out=[];
@@ -376,7 +497,7 @@ function setMode(m){
 
   mode=m;
 
-  for(const x of ['Skills','Cards','Affinity','Latent','Statuses']){
+  for(const x of ['Skills','Cards','Affinity','Latent','Statuses','Owned','Skillballs','Items']){
     $('t'+x).classList.toggle(
       'active',
       m===x.toLowerCase()
@@ -405,6 +526,10 @@ function build(){
   $('latentStatusSelect').innerHTML='<option value="">異常状態を選択</option>'+ss.map(x=>`<option>${esc(x)}</option>`).join('');
   $('cardNames').innerHTML=data.cards.map(c=>`<option value="${esc(c.card_name)}"></option>`).join('');
   $('skillNames').innerHTML=searchableSkills().map(x=>`<option value="${esc(sname(x))}"></option>`).join('');
+  const ballProps=[...new Set((skillballsData?.skillballs||[]).map(x=>x.install_constraints?.property).filter(Boolean))].sort();
+  $('ballProperty').innerHTML='<option value="">全属性</option>'+ballProps.map(x=>`<option>${esc(x)}</option>`).join('');
+  const itemCats=[...new Set((itemsData?.items||[]).map(x=>x.category).filter(Boolean))].sort();
+  $('itemCategory').innerHTML='<option value="">全カテゴリ</option>'+itemCats.map(x=>`<option value="${esc(x)}">${esc(itemCategoryLabel[x]||x)}</option>`).join('');
 }
 function findSkillByName(name){return searchableSkills().find(x=>sname(x)===name)}
 function latentOnlyImmunitySources(c){
@@ -725,6 +850,7 @@ function cardCard(c){
     <div class="detail">
       ${imageHtml(c,true)}
       ${inventoryPanel(c)}
+      ${ownedInstancesPanel(c)}
       <div class="quickStats"><div class="quickStat"><span>HP</span><b>${esc(c.hp_min)}〜${esc(c.hp_max)}</b></div><div class="quickStat"><span>攻撃</span><b>${esc(c.attack_min)}〜${esc(c.attack_max)}</b></div><div class="quickStat"><span>速さ</span><b>${esc(c.speed_min)}〜${esc(c.speed_max)}</b></div><div class="quickStat"><span>Cost</span><b>${esc(c.cost??'')}</b></div></div>
       ${c.description?`<details class="fold"><summary>カード説明</summary><div class="foldBody effect">${esc(c.description)}</div></details>`:''}
       <details class="fold" open><summary>通常スキル ${(c.skills||[]).length}件</summary><div class="foldBody">${base||'<div class="small">なし</div>'}</div></details>
@@ -884,21 +1010,52 @@ function render(){
     const rows=latentResistanceRows();
     $('meta').innerHTML=`${rows.length}カード · AND ${selectedLatentStatuses.length}状態<br><span class="small">${selectedLatentStatuses.map(esc).join(' ＋ ')}</span>`;
     out.innerHTML=rows.slice(0,700).map(latentResistanceCard).join('')||'<div class="card">該当なし</div>';
-  }else{
+  }else if(mode==='statuses'){
     const q=norm($('stq').value),rows=(data.statuses||[]).filter(x=>!q||norm([x.異常状態名,x.説明,(x.関連スキル||[]).join(' ')].join(' ')).includes(q));
     $('meta').textContent=`${rows.length}件 / 全${data.statuses.length}件`;
     out.innerHTML=rows.map(x=>`<div class="card" onclick="openStatus('${esc(x.異常状態名)}')"><div class="title">${esc(x.異常状態名)}</div><div class="effect">${esc(x.説明)}</div><div class="small" style="margin-top:6px">タップで関連スキルを表示</div></div>`).join('');
+  }else if(mode==='owned'){
+    const q=norm($('oq').value),loc=$('ownedLocation').value,f=$('ownedSkillFilter').value,protectedOnly=$('ownedProtected').checked;
+    let rows=ownedInstances.filter(x=>{
+      const st=stateForInstance(x),skills=(st?.skills||[]).map(s=>s.skill_name).join(' ');
+      if(q&&!norm([x.card_name,x.instance_id,x.card_image_id,skills].join(' ')).includes(q))return false;
+      if(loc&&x.location!==loc)return false;
+      if(protectedOnly&&!x.protected)return false;
+      if(f==='empty'&&Number(st?.empty_skill_slot_count||0)<=0)return false;
+      if(f==='skillball'&&!hasClass(st,'owned_skillball_match'))return false;
+      if(f==='extra'&&!hasExtraSkill(st))return false;
+      if(f==='unclassified'&&!hasClass(st,'unclassified_non_native'))return false;
+      if(f==='unavailable'&&currentForInstance(x.instance_id)?.collection_status!=='source_unavailable_stock')return false;
+      return true;
+    });
+    rows.sort((a,b)=>(a.location===b.location?String(a.card_name).localeCompare(String(b.card_name),'ja'):(a.location==='card_list'?-1:1)));
+    $('meta').textContent=`${rows.length}体 / 所有${ownedInstances.length}体`;
+    out.innerHTML=rows.slice(0,716).map(x=>ownedInstanceCard(x)).join('')||'<div class="card">該当なし、または所有データ未読込</div>';
+  }else if(mode==='skillballs'){
+    const q=norm($('bq').value),p=$('ballProperty').value,sort=$('ballSort').value;
+    let rows=(skillballsData?.skillballs||[]).filter(x=>(!q||norm([x.display_name,x.skill_name,x.effect_text,constraintText(x)].join(' ')).includes(q))&&(!p||x.install_constraints?.property===p));
+    rows.sort(sort==='name'?(a,b)=>String(a.skill_name||a.display_name).localeCompare(String(b.skill_name||b.display_name),'ja'):(a,b)=>Number(b.owned_count||0)-Number(a.owned_count||0));
+    const total=rows.reduce((n,x)=>n+Number(x.owned_count||0),0);
+    $('meta').textContent=`${rows.length}種類 · ${total}個 / 所有全${skillballsData?.meta?.total_owned_copies??0}個`;
+    out.innerHTML=rows.map(skillballCard).join('')||'<div class="card">該当なし、または技玉データ未読込</div>';
+  }else if(mode==='items'){
+    const q=norm($('iq').value),cat=$('itemCategory').value,sort=$('itemSort').value;
+    let rows=(itemsData?.items||[]).filter(x=>(!q||norm([x.item_name,x.detail,(x.applicable_cards||[]).map(c=>c.card_name).join(' ')].join(' ')).includes(q))&&(!cat||x.category===cat));
+    rows.sort(sort==='name'?(a,b)=>String(a.item_name).localeCompare(String(b.item_name),'ja'):(a,b)=>Number(b.owned_count||0)-Number(a.owned_count||0));
+    const total=rows.reduce((n,x)=>n+Number(x.owned_count||0),0);
+    $('meta').textContent=`${rows.length}種類 · ${total}個 / 所有全${itemsData?.meta?.total_owned??0}個`;
+    out.innerHTML=rows.map(itemCard).join('')||'<div class="card">該当なし、またはアイテムデータ未読込</div>';
   }
 }
 
 function toggle(b){const c=b.closest('.card');c.classList.toggle('open');b.textContent=c.classList.contains('open')?'閉じる':'詳細'}
 function jumpCard(name){setMode('cards');$('cq').value=name;$('prop').value='';$('gender').value='';$('owned').checked=false;render();scrollTo({top:0,behavior:'smooth'})}
 
-['sq','cq','aq','stq'].forEach(id=>$(id).addEventListener('input',render));
+['sq','cq','aq','stq','oq','bq','iq'].forEach(id=>$(id).addEventListener('input',render));
 $('asq').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();addAffinitySkill()}});
-['genre','status','prop','gender','amatch','adir','impactFilter','defOwned','affinitySort','latentProp','latentGender','latentRoute'].forEach(id=>$(id).addEventListener('change',render));
-['owned','ownedPriority','aowned','impactOwnedPriority','latentOwned','latentOwnedPriority'].forEach(id=>$(id).addEventListener('change',render));
-$('tSkills').onclick=()=>setMode('skills');$('tCards').onclick=()=>setMode('cards');$('tAffinity').onclick=()=>setMode('affinity');$('tLatent').onclick=()=>setMode('latent');$('tStatuses').onclick=()=>setMode('statuses');
+['genre','status','prop','gender','amatch','adir','impactFilter','defOwned','affinitySort','latentProp','latentGender','latentRoute','ownedLocation','ownedSkillFilter','ballProperty','ballSort','itemCategory','itemSort'].forEach(id=>$(id).addEventListener('change',render));
+['owned','ownedPriority','aowned','impactOwnedPriority','latentOwned','latentOwnedPriority','ownedProtected'].forEach(id=>$(id).addEventListener('change',render));
+$('tSkills').onclick=()=>setMode('skills');$('tCards').onclick=()=>setMode('cards');$('tAffinity').onclick=()=>setMode('affinity');$('tLatent').onclick=()=>setMode('latent');$('tStatuses').onclick=()=>setMode('statuses');$('tOwned').onclick=()=>setMode('owned');$('tSkillballs').onclick=()=>setMode('skillballs');$('tItems').onclick=()=>setMode('items');
 $('back').onclick=()=>scrollTo({top:0,behavior:'smooth'});
 $('affByCard').onclick=()=>{affinityMode='card';$('affByCard').classList.add('active');$('affBySkill').classList.remove('active');$('affCardPane').classList.remove('hidden');$('affSkillPane').classList.add('hidden');render()};
 $('affBySkill').onclick=()=>{affinityMode='skill';$('affBySkill').classList.add('active');$('affByCard').classList.remove('active');$('affSkillPane').classList.remove('hidden');$('affCardPane').classList.add('hidden');render()};
@@ -906,22 +1063,45 @@ $('addAffinitySkill').onclick=addAffinitySkill;
 $('addLatentStatus').onclick=addLatentStatus;
 $('smClose').onclick=closeStatus;$('statusModal').onclick=e=>{if(e.target===$('statusModal'))closeStatus()};
 
+function fetchJson(path,label){return fetch(path+'?t='+Date.now(),{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(label+' HTTP '+r.status);return r.json()})}
 Promise.allSettled([
-  fetch(DB+'?t='+Date.now(),{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('カードDB HTTP '+r.status);return r.json()}),
-  fetch(INVENTORY_DB+'?t='+Date.now(),{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('育成DB HTTP '+r.status);return r.json()})
-]).then(([dbRes,invRes])=>{
+  fetchJson(DB,'カードDB'),fetchJson(INVENTORY_DB,'育成DB'),fetchJson(RAW_INVENTORY_DB,'所有DB'),
+  fetchJson(CURRENT_SKILLS_DB,'現在技DB'),fetchJson(SKILLBALLS_DB,'技玉DB'),fetchJson(ITEMS_DB,'アイテムDB')
+]).then(([dbRes,invRes,rawRes,skillRes,ballRes,itemRes])=>{
   if(dbRes.status!=='fulfilled')throw dbRes.reason;
   data=dbRes.value;
   if(invRes.status==='fulfilled'&&Array.isArray(invRes.value?.cards)){
     inventoryData=invRes.value;inventoryLoaded=true;
     inventoryByNo=new Map((inventoryData.cards||[]).map(c=>[String(c.card_no),c]));
-    for(const c of (data.cards||[]))c.owned=Number(invFor(c)?.owned_count||0)>0;
-    const built=inventoryData.meta?.built_at||'日時不明';
-    $('inventoryState').innerHTML=`育成DB連携済み · ${esc(String(inventoryData.meta?.owned_card_type_count??inventoryData.cards.length))}種類 · ${esc(built)}`;
-  }else{
-    inventoryLoaded=false;
-    $('inventoryState').textContent='育成DB未連携：カードDBの保有フラグで表示します';
   }
+  if(rawRes.status==='fulfilled'&&Array.isArray(rawRes.value?.owned_instances)){
+    initRawInventory(rawRes.value);
+    inventoryLoaded=true;
+    for(const [no,rows] of ownedByNo){
+      const prev=inventoryByNo.get(no)||{card_no:no};
+      const awake=rows.map(x=>awakeningByInstance.get(String(x.instance_id))).filter(Boolean);
+      inventoryByNo.set(no,{...prev,owned_count:rows.length,awakening_count:awake.reduce((n,x)=>Math.max(n,Number(x.awakening_count||0)),0),awakening_max_site:awake.reduce((n,x)=>Math.max(n,Number(x.awakening_max_site||0)),0)});
+    }
+  }
+  if(skillRes.status==='fulfilled'&&Array.isArray(skillRes.value?.cards)){
+    currentSkillsData=skillRes.value;currentSkillByInstance=new Map(skillRes.value.cards.map(x=>[String(x.instance_id),x]));
+  }
+  if(ballRes.status==='fulfilled'&&Array.isArray(ballRes.value?.skillballs))skillballsData=ballRes.value;
+  if(itemRes.status==='fulfilled'&&Array.isArray(itemRes.value?.items))itemsData=itemRes.value;
+  const optional=[['育成',invRes],['所有',rawRes],['現在技',skillRes],['技玉',ballRes],['アイテム',itemRes]];
+  optionalLoadErrors=optional.filter(([,r])=>r.status==='rejected').map(([n,r])=>`${n}: ${r.reason?.message||'読込失敗'}`);
+  for(const c of (data.cards||[]))c.owned=rawInventoryData?ownedByNo.has(String(c.card_no)):Number(invFor(c)?.owned_count||0)>0;
+  if(inventoryLoaded){
+    const types=rawInventoryData?ownedByNo.size:(inventoryData?.meta?.owned_card_type_count??inventoryData?.cards?.length??0);
+    $('inventoryState').innerHTML=`所有・育成連携済み · ${esc(String(types))}種類${rawInventoryData?` · ${ownedInstances.length}体`:''}`;
+  }else $('inventoryState').textContent='所有・育成DB未連携：カードDBの保有フラグで表示します';
+  const pills=[
+    ['所有',!!rawInventoryData,ownedInstances.length?`${ownedInstances.length}体`:'未読込'],
+    ['現在技',!!currentSkillsData,currentSkillsData?`${currentSkillsData.meta?.card_list_resolved??0}/${currentSkillsData.meta?.expected_instances??0}`:'未読込'],
+    ['技玉',!!skillballsData,skillballsData?`${skillballsData.meta?.row_count??0}種`:'未読込'],
+    ['アイテム',!!itemsData,itemsData?`${itemsData.meta?.valid_items??0}種`:'未読込']
+  ];
+  $('userStateNotice').innerHTML=`<div class="dataState">${pills.map(([n,ok,v])=>`<span class="dataPill ${ok?'ok':'warn'}">${n} ${v}</span>`).join('')}</div>${optionalLoadErrors.length?`<div class="small loadErrors" style="margin-top:7px">${esc(optionalLoadErrors.join('\n'))}</div>`:''}`;
   buildEvolutionIndex();
   build();render();
 }).catch(e=>{
