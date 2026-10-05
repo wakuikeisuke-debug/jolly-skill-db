@@ -1,15 +1,31 @@
 (() => {
 'use strict';
-const VERSION='jolly-targeted-skill-genre-2026-10-05-v1';
+const VERSION='jolly-targeted-skill-genre-2026-10-05-v1.1';
 const STATE_KEY='JOLLY_TARGET_GENRE_STATE_20261005_V1';
 const TARGETS=[{"type":"new_since_2026_09_12","id":"922","observed_text":"共鳴３連突【名前】 【】の海賊が同じデッキにいると、さらに「３連突」を発動する。[攻撃]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=922","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=183","skill_name_hint":"共鳴３連突【名前】"},{"type":"new_since_2026_09_12","id":"1124","observed_text":"リベンジトラップ 【後列】にいるとき、敵の支援を逆手に取った罠を起動する。敵の【海賊】は行動時に発動者の攻撃力分のダメージを受ける。(体力が最大体力より多い敵には、効果3倍)[バトル開始時発動][倒れるまで有効][攻撃]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=1124","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=64","skill_name_hint":"リベンジトラップ"},{"type":"new_since_2026_09_12","id":"1126","observed_text":"共振羽 羽ばたきの共振が心に揺さぶりをかける。【前一列】の敵の海賊は、行動時に最大体力の40%のダメージを受ける。[バトル開始時発動][倒れるまで有効][攻撃]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=1126","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=19","skill_name_hint":"共振羽"},{"type":"new_since_2026_09_12","id":"1127","observed_text":"鳴動羽 羽ばたきの鳴動が魂に揺さぶりをかける。【前一列】の敵の海賊は、行動時に最大体力の60%のダメージを受ける。[バトル開始時発動][倒れるまで有効][攻撃]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=1127","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=19","skill_name_hint":"鳴動羽"},{"type":"new_since_2026_09_12","id":"2467","observed_text":"８連撃 ８回攻撃する。[攻撃]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=2467","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=56","skill_name_hint":"８連撃"},{"type":"new_since_2026_09_12","id":"3122","observed_text":"秤ヶ淵 己と敵の命を平等に秤にかけ、冥界の海を満たす。敵の【海賊】全員の体力を、自分の今の体力と同じにする。（それぞれの最大体力は超えない）","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=3122","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=141","skill_name_hint":"秤ヶ淵"},{"type":"new_since_2026_09_12","id":"3123","observed_text":"万怪異譚 心に悲しくもおぞましい物語を語りかけ、敵の【前一列】に1ターン後に発動するトラップ(行動時にテマリの攻撃力の1300％分のダメージを受ける)を仕掛ける。[倒れるまで有効][攻撃]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=3123","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=140","skill_name_hint":"万怪異譚"},{"type":"new_since_2026_09_12","id":"4238","observed_text":"【魔】七星点倒 敵の主力に狙いを定め、味方の全ての【魔】に、「セブンスター」の効果を与える。(すでに「セブンスター」の効果を持っている味方はのぞく。レイドモンスター戦では発動しない)[バトル開始時発動][倒れるまで有効][攻撃アップ:味方]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=4238","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=139","skill_name_hint":"【魔】七星点倒"},{"type":"new_since_2026_09_12","id":"4249","observed_text":"痺毒の鱗粉 体を痺れさせる毒の鱗粉を撒き、敵の【海賊】全てを「麻痺」させる。[バトル開始時発動][1戦闘1回][異常付加]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=4249","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=108","skill_name_hint":"痺毒の鱗粉"},{"type":"new_since_2026_09_12","id":"4250","observed_text":"幻蝶の闇 【後列】に居る時、蝶の幻影で敵の目をくらませ、【前一列】の敵が与える攻撃のダメージを自分の攻撃力分下げる。(レイドモンスター戦では発動しない)[バトル開始時発動][倒れるまで有効][敵攻撃ダウン]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=4250","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=108","skill_name_hint":"幻蝶の闇"},{"type":"new_since_2026_09_12","id":"7145","observed_text":"冥土反し 呪力の続く限り(現在レベル÷40回まで)この世に舞い戻り、体力が0になっても最大体力の100％の体力で復活する。(最小1回、最大13回発動)","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=7145","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=160","skill_name_hint":"冥土反し"},{"type":"new_since_2026_09_12","id":"7146","observed_text":"遠見鏡 遠方からの攻撃を見通し跳ね除ける。敵の【魔・飛】からの攻撃のダメージは遮断され、相手にダメージが跳ね返る。(自分のレベル×1％分跳ね返る)","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=7146","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=161","skill_name_hint":"遠見鏡"},{"type":"new_since_2026_09_12","id":"7306","observed_text":"癒しの白光 前列で最初に行動する味方にお供して治癒の力を開放し、味方の【海賊】全てを、発動者の最大体力分回復する。[バトル開始時発動][倒れるまで有効][体力回復:味方]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=7306","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=70","skill_name_hint":"癒しの白光"},{"type":"new_since_2026_09_12","id":"7307","observed_text":"治癒の閃光 前列で最初に行動する味方にお供して治癒の力を使い、味方の【海賊】全てを発動者の最大体力分回復する。その回復は、味方の最大体力を超えていく。（味方の最大体力の4倍がMAX）[バトル開始時発動][倒れるまで有効][体力回復:味方]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=7307","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=70","skill_name_hint":"治癒の閃光"},{"type":"new_since_2026_09_12","id":"7308","observed_text":"マイティアーミー 前線で戦う者の力を最大限に引き出し、【前一列】の味方の攻撃力を上げる。(発動者の攻撃力分上昇。前列の味方が【戦】の場合、効果5倍)[バトル開始時発動][倒れるまで有効][攻撃アップ:味方]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=7308","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=70","skill_name_hint":"マイティアーミー"},{"type":"new_since_2026_09_12","id":"7330","observed_text":"救助の策 前列で最初に行動する味方に同行して治療を行い、味方の【海賊】全てを発動者の攻撃力の200％分回復する。MAXで味方の最大体力の2倍まで回復できる。[バトル開始時発動][倒れるまで有効][体力回復:味方]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=7330","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=83","skill_name_hint":"救助の策"},{"type":"new_since_2026_09_12","id":"7331","observed_text":"救援の策 前列で最初に行動する味方に同行して治療を行い、味方の【海賊】全てを発動者の攻撃力の200％分回復する。MAXで味方の最大体力の5倍まで回復できる。[バトル開始時発動][倒れるまで有効][体力回復:味方]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=7331","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=83","skill_name_hint":"救援の策"},{"type":"new_since_2026_09_12","id":"8063","observed_text":"即断速攻 はじめて攻撃を行う時だけ、攻撃力と船撃が10倍になる。[攻撃アップ:自分][船撃アップ:自分]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=8063","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=174","skill_name_hint":"即断速攻"},{"type":"new_since_2026_09_12","id":"10752","observed_text":"鋭鋒の迎撃 【前列-中列】で敵の【海賊】から攻撃を受けた場合、見事に攻撃を受け流してダメージを99％軟化し、猛然と5倍の攻撃力で反撃する。[カウンター][ダメージ軟化:敵]","detail_url":"https://yamada.kaizoku-jolly.com/?M=Card&A=Album&skill_no=10752","source_page":"https://yamada.kaizoku-jolly.com/?M=Help&A=SkillSearch&skill_kind=0&SkillType=&search=&page_scroll=1&p=63","skill_name_hint":"鋭鋒の迎撃"}];
-const TYPES={1:'攻撃系スキル',2:'回復・支援系',3:'攻撃補助系',4:'援護系',5:'潜在系',6:'仲間系',7:'防御系',8:'ステータスUP系',9:'デッキ制御系',10:'異常状態系'};
+const CATEGORIES=[{id:1,genre:'攻撃系スキル'},{id:2,genre:'回復・支援系'},{id:3,genre:'デッキ制御系'},{id:4,genre:'援護系'},{id:5,genre:'潜在能力系'},{id:6,genre:'攻撃補助系'},{id:7,genre:'仲間系'},{id:100,genre:'防御系'},{id:13,genre:'ステータスUP系'},{id:8,genre:'対レイドモンスター系'}];
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const clean=s=>String(s||'').replace(/\s+/g,' ').trim();
 const targetIds=new Set(TARGETS.map(x=>String(x.id)));
-function empty(){return {type:1,page:0,visited:0,done:false,running:false,matches:{},errors:[],chunk:1,chunk_pages:[]};}
+function empty(){return {category_index:0,page:0,visited:0,done:false,running:false,matches:{},errors:[],chunk:1,chunk_pages:[]};}
 function load(){try{return JSON.parse(localStorage.getItem(STATE_KEY))||empty()}catch(e){return empty()}}
-let S=load();function saveState(){localStorage.setItem(STATE_KEY,JSON.stringify(S));}
+let S=load();
+function migrateState(){
+  if(Number.isInteger(S.category_index)) return;
+  // v1 bug migration: type=8 here means categories 1..7 were completed and it stopped
+  // before the real category 100. Preserve all prior visited pages/matches.
+  const legacyType=Number(S.type||1);
+  if(legacyType<=7) S.category_index=Math.max(0,legacyType-1);
+  else if(legacyType===8) S.category_index=7;
+  else S.category_index=0;
+  delete S.type;
+  // Remove only the synthetic error caused by the bad type=8 identity check.
+  S.errors=(S.errors||[]).filter(e=>!String(e.error||'').includes('SKILLTYPE_IDENTITY_OR_EMPTY type=8'));
+  S.running=false; S.done=false;
+  saveState();
+}
+function saveState(){localStorage.setItem(STATE_KEY,JSON.stringify(S));}
+migrateState();
 function panel(){
  document.getElementById('jr-genre-panel')?.remove();const d=document.createElement('div');d.id='jr-genre-panel';
  d.style.cssText='position:fixed;left:8px;right:8px;bottom:8px;z-index:2147483647;background:#111827;color:#fff;padding:12px;border-radius:14px;font:13px -apple-system,sans-serif;max-height:75vh;overflow:auto;box-shadow:0 8px 30px #0008';
@@ -17,7 +33,7 @@ function panel(){
  const st=document.createElement('style');st.textContent='#jr-genre-panel button{border:0;border-radius:9px;padding:9px;margin:3px;font:inherit;font-weight:700}';document.documentElement.appendChild(st);document.body.appendChild(d);
  document.getElementById('jrggo').onclick=()=>run();document.getElementById('jrgsave').onclick=()=>saveJson();document.getElementById('jrgnext').onclick=nextChunk;document.getElementById('jrgreset').onclick=resetAll;refresh();
 }
-function refresh(){const resolved=TARGETS.filter(t=>(S.matches[t.id]||[]).length===1).length;document.getElementById('jrgst').textContent=`SkillType ${S.type}/10 page ${S.page} / visited ${S.visited} / resolved ${resolved}/19 / errors ${S.errors.length} / done ${S.done}`;}
+function refresh(){const resolved=TARGETS.filter(t=>(S.matches[t.id]||[]).length===1).length;const c=CATEGORIES[S.category_index];document.getElementById('jrgst').textContent=`SkillType ${c?c.id:'完了'} / category ${Math.min(S.category_index+1,10)}/10 page ${S.page} / visited ${S.visited} / resolved ${resolved}/19 / errors ${S.errors.length} / done ${S.done}`;}
 async function fetchDoc(url){
  const r=await fetch(url,{credentials:'include',cache:'no-store',redirect:'follow'}),html=await r.text();if(!r.ok)throw new Error('HTTP '+r.status);if(/ログイン情報入力|module=auth|auth001/.test(html))throw new Error('LOGIN_REQUIRED');if(/quota has been exceeded/i.test(html))throw new Error('QUOTA_EXCEEDED');return new DOMParser().parseFromString(html,'text/html');
 }
@@ -32,23 +48,26 @@ function hasNext(doc,type,page){
 }
 async function run(){
  if(S.running||S.done)return;S.running=true;saveState();let n=0;
- while(S.type<=10&&n<70){
-  const u=urlFor(S.type,S.page);
+ while(S.category_index<CATEGORIES.length&&n<70){
+  const cat=CATEGORIES[S.category_index],type=cat.id,u=urlFor(type,S.page);
   try{
    const d=await fetchDoc(u),rr=rows(d,u);
-   if(S.page===0&&rr.length===0)throw new Error('SKILLTYPE_IDENTITY_OR_EMPTY type='+S.type);
+   // Empty category is valid if the returned page is still SkillSearch.
+   // This is expected for SkillType=8 in the previously validated crawl.
+   const body=clean(d.body?.innerText||d.body?.textContent||'');
+   if(!body.includes('スキル')&&!body.includes('検索')) throw new Error('SKILLSEARCH_IDENTITY_FAILED type='+type);
    for(const r of rr)if(targetIds.has(r.id)){
     S.matches[r.id]=S.matches[r.id]||[];
-    if(!S.matches[r.id].some(x=>x.skill_type===S.type))S.matches[r.id].push({skill_type:S.type,genre:TYPES[S.type],source_url:u,observed_text:r.text});
+    if(!S.matches[r.id].some(x=>x.skill_type===type))S.matches[r.id].push({skill_type:type,genre:cat.genre,source_url:u,observed_text:r.text});
    }
-   S.chunk_pages.push({skill_type:S.type,page:S.page,url:u,row_count:rr.length});
+   S.chunk_pages.push({skill_type:type,genre:cat.genre,page:S.page,url:u,row_count:rr.length});
    S.visited++;n++;
-   const next=hasNext(d,S.type,S.page);
-   if(next)S.page++; else {S.type++;S.page=0;}
-  }catch(e){S.errors.push({skill_type:S.type,page:S.page,url:u,error:String(e)});S.running=false;saveState();refresh();alert('安全停止: '+e);return;}
+   const next=hasNext(d,type,S.page);
+   if(next)S.page++; else {S.category_index++;S.page=0;}
+  }catch(e){S.errors.push({skill_type:type,page:S.page,url:u,error:String(e)});S.running=false;saveState();refresh();alert('安全停止: '+e);return;}
   saveState();refresh();await sleep(500);
  }
- S.running=false;if(S.type>10)S.done=true;saveState();refresh();
+ S.running=false;if(S.category_index>=CATEGORIES.length)S.done=true;saveState();refresh();
  if(S.done)alert('genre走査完了。JSON保存してください。');else alert('70ページで停止しました。JSON保存後「次チャンクへ」を押してください。');
 }
 function build(){
